@@ -1,0 +1,499 @@
+---
+title: "Tibet Climate Analysis"
+output:
+  html_notebook
+---
+
+An analysis of present and past temperature and precipitation variability across the Tibetan Plateau using [CHELSA climate data](https://chelsa-climate.org).
+
+# Setup
+
+Import the required R packages for this analysis. Then define a bounding box with which to constrain the analysis, and use that bounding box to create a reference raster at a 5' resolution with which to reproject the climate data. Finally, import a country boundaries shapefile to use for plotting. 
+
+```{r setup, message = FALSE, warning = FALSE}
+# analysis packages
+library(stars) # spatio-temporal raster processing
+library(units) # track raster units
+library(tidyverse) # data manipulation and plotting
+library(tidyEOF) # estimating recurring climate patterns
+
+# visualization pacakges
+library(scico) # color tables
+library(rnaturalearth) # country boundaries
+
+# define the study area
+bbox <- st_bbox(c(xmin = 65, xmax = 105, ymin = 25, ymax = 45), crs = 4326)
+
+# create a 5' reference raster
+ref <- st_as_stars(bbox, dx = 0.0833333)
+
+# get country boundaries shapefile
+countries <- ne_countries(returnclass = "sf", scale = 'large') %>%
+  st_crop(bbox)
+```
+
+# Present Climate
+
+First analyze present-day (1979-2013) climate averages and interannual variability.
+
+## Temperature and Growing Degree Days
+
+Import the CHELSA V1.2 time series for growing degree days above 0°C.
+
+```{r gddimport, cache = TRUE}
+gdd0 <- list.files('/Volumes/Data/CHELSA/gdd0', pattern = 'gdd0_', full.names = TRUE) %>%
+  read_stars(along = 'time') %>% 
+  st_crop(bbox) %>%
+  st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
+  st_set_dimensions('band', values = 1979:2013, names = 'time') %>%
+  setNames('gdd0') %>%
+  mutate(gdd0 = set_units(round(gdd0), 'days'))
+```
+
+### Climatology
+
+Visualize the average and standard deviation of growing degree days from 1979-2013.
+
+```{r echo=FALSE}
+ggplot() +
+  geom_stars(data = st_apply(gdd0, 1:2, mean, na.rm = TRUE)) +
+  scale_fill_viridis_c(option = 'magma', name = 'Days') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Average growing degree days above 0°C', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_minimal()
+```
+```{r echo=FALSE}
+ggplot() +
+  geom_stars(data = st_apply(gdd0, 1:2, sd, na.rm = TRUE)) +
+  scale_fill_viridis_c(option = 'magma', name = 'Days') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Standard deviation growing degree days above 0°C', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_minimal()
+```
+### Interannual variability
+
+It looks like three leading patterns collectively explain 47% of the year-to-year variance in the 35-year record. The remaining patterns appear not to be significant. Patterns with overlapping error bars (sharing the same color below) are "degenerate multiplets" that cannot be meaningfully distinguished from one another in the short observational period.
+
+```{r gdd-scree, echo = FALSE}
+gdd0 %>%
+  get_pcs() %>%
+  get_eigenvalues() %>% 
+  plot_scree(k = 3, kmax = 10) +
+  scale_color_brewer(palette = 'Spectral')
+```
+The high degree of overlap in the scree plot above likely reflects the unique character of the growing degree day variable. Growing degree days can be awkward to analyze statistically, because it can only take discrete values between 0 and 365. A related, more more physically meaningful, variable is *accumulated temperature* on days above 0°C. Let's import and analyze that data the same as above, then use that for the analysis of interannual variability.
+
+```{r gts-import, cache = TRUE}
+# the NA values aren't properly read from this file by default, 
+# so the import process is a bit more convoluted
+gts <- list.files('/Volumes/Data/CHELSA/CHELSA_V1_GDD_TS', 
+                  pattern = 'gts', full.names = TRUE)  %>%
+  map(~read_stars(., NA_value = -99999) %>%
+    st_crop(bbox) %>%
+    st_as_stars() %>% # need to convert to stars before warping so na values are correct
+    st_warp(dest = ref, use_gdal = TRUE, method = 'average')
+    ) %>%
+  do.call('c', .) %>%
+  merge(name = 'time') %>%
+  st_set_dimensions('time', values = 1979:2013) %>%
+  setNames('gts0') %>%
+  dplyr::mutate(gts0 = set_units(gts0, degree_C)) %>%
+  mutate(gts0 = replace_na(gts0, 0))
+```
+
+Accumulated temperature does a much better job of distinguishing between the Tibetan Plateau and the surrounding areas. We get a much better idea of just *how* much the temperature signal varies across elevation, that would otherwise be lost using just growing degree days.
+
+```{r echo=FALSE}
+ggplot() +
+  geom_stars(data = st_apply(gts, 1:2, mean, na.rm = TRUE)) +
+  scale_fill_viridis_c(option = 'magma', name = '°C') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Annual accumulated temperature above 0°C', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013 average',
+       x = 'Longitude', y = 'Latitude') +
+  theme_minimal()
+```
+Note the pixels with anomalously high standard deviations along the edge of the Tibetan Plateau. This could reflect a combination of the temperature inversions created by the CHELSA algorithm and resampling from a the 1km grid to a to a 5' resolution.
+
+```{r echo=FALSE}
+ggplot() +
+  geom_stars(data = st_apply(gts, 1:2, sd, na.rm = TRUE)) +
+  scale_fill_viridis_c(option = 'magma', name = '°C') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Standard deviation of accumulated temperature above 0°C', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_minimal()
+```
+
+The scree plot for accumulated temperature is much better behaved. We still get three leading patterns, but now they are much better separated from one another than the GDD patterns. The three leading patterns together explain 77% of the year-to-year temperature variance in the 1973-2013 observational record.
+
+```{r gts-scree, echo = FALSE}
+gts %>%
+  get_pcs() %>%
+  get_eigenvalues() %>% 
+  plot_scree(k = 3, kmax = 10) +
+  scale_color_brewer(palette = 'Spectral')
+```
+
+So let's just focus on those leading three patterns.
+```{r}
+gts_patterns <- get_patterns(gts, k = 3)
+```
+
+```{r, echo = FALSE, warning=FALSE,fig.width = 3, fig.asp = 1.5}
+ggplot() +
+  geom_stars(data = get_correlation(gts, gts_patterns)) +
+  facet_wrap(~PC, ncol = 1) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of accumulated temperature variability', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+
+We can also look at how these patterns have evolved through time.
+
+```{r}
+plot_amps(gts_patterns) +
+  facet_wrap(~PC, ncol = 1) +
+  geom_hline(yintercept = 0, linetype = 2, alpha = .5) +
+  scale_x_continuous(breaks = seq(1980, 2015, 5)) +
+  labs(title = 'Leading modes of accumulated temperature variability through time', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Year', y = 'Standard deviations')
+```
+By comparing the EOF/PC spatial patterns and their associated time series we can come to some preliminary guesses as to the sources of interannual temperature variability across the Tibetan Plateau:
+
+- EOF/PC 1 appears to be a domain wide warming signal. Warming is most strongly expressed in the lowlands of the Tarim Basin, but extends across most of the domain. There are a few notable regions that appear to be experiencing cooling, although these relationships are not as strong as the warming signal and are possibly not significant features of this spatial pattern.
+
+- EOF/PC 2 shows a clear north-south contrast in temperature anomalies centered along the southern edge of the Himalayas, likely associated with southwesterly flow from the Indian Monsoon. This pattern was most strongly expressed during the 1997-1998 and 2015-2016 El Niño events. El Niño tends to weaken monsoon rains over India, although notably not during the 1998 event. Snow cover on the Tibetan Plateau and greater Eurasia can modulate the local impact of ENSO events, which may be what we're seeing here.
+
+- EOF/PC 3 exhibits an east-west dipole with antiphase conditions in the Hindu Kush and the Tibetan Plateau. It is most strongly positively expressed during the 1982-1983 El Niño event, and strongly negatively expressed in the record-breaking North Atlantic Oscillation event of 2009. This pattern likely reflects westerly flow of air masses influenced by the North Atlantic Oscillation. 2009 was the hottest year on record over much of the Tibetan Plateau, which we can see here was due to a strongly negative PC3 pattern embedded on the broader warming trend in PC1.
+
+
+## Precipitation
+
+Now we can repeat the whole process for total annual precipitation.
+
+```{r prc_import, cache = TRUE}
+prc <- list.files('/Volumes/Data/CHELSA/CHELSA_BIO_V1', 
+                  pattern = 'bio12', full.names = TRUE)  %>%
+  map(~read_stars(., NA_value = -99999) %>%
+    st_crop(bbox) %>%
+    st_as_stars() %>% # need to convert to stars before warping so na values are correct
+    st_warp(dest = ref, use_gdal = TRUE, method = 'average')) %>%
+  do.call('c', .) %>%
+  merge(name = 'time') %>%
+  st_set_dimensions('time', values = 1979:2013) %>%
+  setNames('prc') %>%
+  dplyr::mutate(prc = units::set_units(prc, 'mm'))
+```
+
+### Climatology
+
+Visualize the average of total annual precipitation.
+
+```{r echo=FALSE}
+ggplot() +
+  geom_stars(data = st_apply(prc, 1:2, mean, na.rm = TRUE)) +
+  scale_fill_viridis_c(option = 'viridis', name = 'mm', na.value = NA) +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Total annual precipitation', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013 average',
+       x = 'Longitude', y = 'Latitude') +
+  theme_minimal()
+```
+
+Those extreme values in the southeast make it hard to see patterns elsewhere, so we can try log transforming the totals first. This let's us see the contrasts between the Tarim Basin and the orographic effect of the Himalayas much more clearly.
+
+```{r echo=FALSE}
+ggplot() +
+  geom_stars(data = st_apply(prc, 1:2, mean, na.rm = TRUE)) +
+  scale_fill_viridis_c(option = 'viridis', name = 'mm', na.value = NA, trans = 'log') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Total annual precipitation, log transformed', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013 average',
+       x = 'Longitude', y = 'Latitude') +
+  theme_minimal()
+```
+
+The standard deviation plots (not shown) largely resemble those of the averages, which is to be expected because we're dealing with precipitation *magnitudes* so the mean and variance are often proportional. Instead we can plot the coefficient of variation by dividing the standard deviation by the mean.
+
+```{r echo=FALSE}
+ggplot() +
+  geom_stars(data = st_apply(prc, 1:2, sd, na.rm = TRUE)/ st_apply(prc, 1:2, mean, na.rm = TRUE) * 100) +
+  scale_fill_viridis_c(option = 'viridis', name = '% of mean', na.value = NA) +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Coefficient of variation of annual precipitation', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013 average',
+       x = 'Longitude', y = 'Latitude') +
+  theme_minimal()
+```
+
+### Interannual variability
+
+A PCA on the unstandardized precipitation anomalies doesn't do a great job of separating out the modes of variability, possibly because those high-rainfall pixels in the southeast of the domain dominate the signal. An alternative that accounts for this is to use the standardized anomalies. Alternatively, rotating the PCs may be another way of reducing the impact of these "mixed" patterns.
+
+```{r prc-scree, echo = FALSE}
+prc %>%
+  get_pcs() %>%
+  get_eigenvalues() %>% 
+  plot_scree(k = 1, kmax = 20) +
+  scale_color_brewer(palette = 'Spectral')
+```
+Let's look at all four options, with each combination of standardized and unstandardized and rotated and unrotated PCs. We'll look at the leading 6 PCs as an example.
+
+```{r, echo = FALSE}
+ggplot() +
+  geom_stars(data = get_correlation(prc, get_patterns(prc, k = 6))) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of precipitation variability', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+
+ggplot() +
+  geom_stars(data = get_correlation(prc, get_patterns(prc, k = 6, rotate = TRUE))) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of precipitation variability, rotated', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+
+
+ggplot() +
+  geom_stars(data = get_correlation(prc, get_patterns(prc, k = 6,scale = TRUE))) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of precipitation variability, standardized', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+
+ggplot() +
+  geom_stars(data = get_correlation(prc, get_patterns(prc, k = 6,scale = TRUE, rotate = TRUE))) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of precipitation variability, rotated and standardized', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+
+From looking at the PC amplitudes, we see that PC1 reflects wetter conditions on the Tibetan Plateau and drier conditions in Kashmir and other places due to climate change. PC2 is an ENSO signal again, with a dipole separating the southern and northern halves of the Tibetan Plateau.
+
+```{r}
+plot_amps(get_patterns(prc, k = 6))
+plot_amps(get_patterns(prc, k = 6, rotate = TRUE))
+plot_amps(get_patterns(prc, k = 6, scale = TRUE))
+plot_amps(get_patterns(prc, k = 6, scale = TRUE, rotate = TRUE))
+```
+
+Surprisingly, none of these various transformations of the precipitation data alter the resulting patterns too much. The leading PC patterns seems like a Tibetan Plateau signal, but the pattern is rough. The remaining patterns display much less coherent variability overall, save for a pattern focused around the Indus valley that appears in a few different configurations. Overall the lack of coherent variability here is notable, and suggests there isn't clear coherent spatial covariance in the underlying annual precipitation fields *as defined here*. We can confirm this by examining the raw standardized anomalies, from which the PCs are calculated.
+
+```{r, echo=FALSE, fig.asp = .7}
+t1 <- get_climatology(prc)
+t2  <-  prc %>%
+    units::drop_units() %>%
+    {. -  t1['mean']} %>% # center the field
+    { . /  t1['sd']}
+ggplot() +
+  geom_stars(data = t2) +
+  facet_wrap(~time) +
+  scale_fill_scico(palette = 'vik', limits = c(-4.5, 4.5), name = 'SD') +
+  geom_sf(data = countries, fill= NA) +
+  theme_bw() +
+  labs(title = 'Standardized annual precipitation anomalies', 
+       x = 'Longitude', y = "Latitude")
+```
+Compare those to the unstandardized anomalies. 
+
+```{r, echo = FALSE, fig.asp = .7}
+ggplot() +
+  geom_stars(data = drop_units(prc) - get_climatology(prc)['mean']) +
+  facet_wrap(~time) +
+  scale_fill_scico(palette = 'vik', name = 'SD') +
+  geom_sf(data = countries, fill= NA) +
+  theme_bw() +
+  labs(title = 'Standardized annual precipitation anomalies', 
+       x = 'Longitude', y = "Latitude")
+```
+
+Does log-transforming precipitation help?
+
+```{r prc-scree-log, echo = FALSE}
+prc %>%
+  log() %>%
+  get_pcs() %>%
+  get_eigenvalues() %>% 
+  plot_scree(k = 1, kmax = 20) +
+  scale_color_brewer(palette = 'Spectral')
+```
+
+```{r, echo = FALSE}
+ggplot() +
+  geom_stars(data = get_correlation(mutate(prc, prc = log(prc + set_units(0.01, mm))), get_patterns(mutate(prc, prc = log(prc + set_units(0.01, mm))), k = 6))) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of precipitation variability', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+
+
+So the takeaway here is that total annual precipitation, summed over January-December, may not be the best way to look at precipitation over this particular domain. We know that precipitation is highly seasonal in this region, such as the summer monsoons in India and winter snowfall on the Tibetan Plateau. 
+
+So moving forward it might make more sense to focus on monthly or seasonal precipitation patterns, or to define "water years" on some other range than January-December. An alternative is to move beyond precipitation entirely to a more directly relevant agricultural variable such as water stress, just as we looked at accumulated growing degree days rather than raw precipitation averages.
+
+# Past Climate
+
+Next let's import the CHELSA-TraCE dataset, a downscaled version of the CCSM3 TraCE-21k simulations. These data represent annual sums or averages, archived at 100-year intervals from the Last Glacial Maximum to the present.
+
+```{r trace-prc-import, cache = TRUE}
+trace_order <- list.files('/Volumes/Data/CHELSA/chelsa_trace/bio12', full.names = FALSE) %>%
+  str_sub(23, -10) %>% 
+  as.numeric() %>% 
+  order()
+
+test_trace <- list.files('/Volumes/Data/CHELSA/chelsa_trace/bio12', full.names = TRUE)[trace_order] %>%
+  read_stars(along = 'time') %>%
+  st_crop(bbox) %>%
+  st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
+  st_set_dimensions('band', values = seq(-9, 0, 0.1), names = 'time') %>%
+  setNames('prc') %>%
+  mutate(prc = set_units(prc, 'mm'))
+
+```
+
+```{r trace-scree, echo = FALSE}
+test_trace %>%
+  get_pcs() %>%
+  get_eigenvalues() %>% 
+  plot_scree(k = 1, kmax = 20) +
+  scale_color_brewer(palette = 'Spectral')
+```
+
+```{r}
+trace_patterns <- get_patterns(test_trace %>% st_set_dimensions('time', values = -90:0))
+```
+
+
+```{r}
+ggplot() +
+  geom_stars(data = get_correlation(test_trace%>% st_set_dimensions('time', values = -90:0), trace_patterns)) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of millennial-scale precipitation variability', 
+       subtitle = 'CHELSA V1.2 data, 9kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+```{r}
+ggplot() +
+  geom_stars(data = get_correlation(test_trace%>% st_set_dimensions('time', values = -90:0), get_patterns(test_trace %>% st_set_dimensions('time', values = -90:0), k = 6, rotate = TRUE))) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of millennial-scale precipitation variability', 
+       subtitle = 'CHELSA V1.2 data, 9kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+```{r}
+plot_amps(get_patterns(test_trace %>% st_set_dimensions('time', values = -90:0), k = 6, rotate = TRUE)) +
+  scale_x_continuous(breaks = seq(-90, 0, 10), labels = -9:0) +
+  geom_hline(yintercept = 0, linetype = 2)
+```
+Look at that anomaly in RPCA2, the lowest point a bit before 2ka -- rice to indonesia?
+
+```{r echo  FALSE}
+ggplot() +
+  geom_stars(data = trace_patterns$eofs[,,,1]) +
+  facet_wrap(~PC) +
+  scale_fill_viridis_c(direction =-1) +
+  #scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Millennial-scale drying trend', 
+       subtitle = 'CHELSA_TraCE V1.1 data, 9kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+
+
+ggplot() +
+  geom_stars(data = trace_patterns$eofs[,,,3]) +
+  facet_wrap(~PC) +
+  scale_fill_viridis_c(direction =-1) +
+  #scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of precipitation variability', 
+       subtitle = 'CHELSA_TraCE V1.1 data, 9kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+
+ggplot() +
+  geom_stars(data = trace_patterns$eofs[,,,4]) +
+  facet_wrap(~PC) +
+  #scale_fill_viridis_c(direction =-1) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of precipitation variability', 
+       subtitle = 'CHELSA_TraCE V1.1 data, 9kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+So we see a long term drying trend along the Himalayas and in the central/southeastern Tibetan Plateau, and a slight moistening in the western Plateau. PC2 is an alternating wet-dry dipole between Bangladesh and Afghanistan -- possibly an NAO signal? It shows a big shock around 4.2ka. And later ones too. Interestingly these look like multi-centennial rebounds that get more extreme as time goes on. Anything interesting happening culturally around these times?
+
+PC4 is out global warming signal
+```{r}
+plot_amps(trace_patterns) +
+  scale_x_continuous(breaks = -9:0)
+```
+```{r}
+ggplot(trace_patterns$amplitudes %>% select(time, PC2), aes(time, PC2)) +
+  geom_line() +
+  theme_bw() +
+  scale_x_continuous(breaks = -9:0) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = c(-5.3, -3.5, -1.7, -0.8))
+```
+
+```{r}
+ggplot() +  geom_stars(data = trace_patterns$eofs[,,,2]) +
+  facet_wrap(~PC) +
+  #scale_fill_viridis_c(direction =-1) +
+  scale_fill_scico(palette = 'vik', na.value = NA, limits = c(-150, 150)) +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of precipitation variability', 
+       subtitle = 'CHELSA_TraCE V1.1 data, 9kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+
+
+```{r}
+ggplot() +
+  geom_stars(data = test_trace[,,,1] - test_trace[,,,91]) +
+  scale_fill_viridis_c(direction = 1) +
+  #scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of precipitation variability', 
+       subtitle = 'CHELSA V1.2 data, 1979-2013',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+
