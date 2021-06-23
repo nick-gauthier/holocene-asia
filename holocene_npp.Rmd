@@ -1,0 +1,180 @@
+---
+title: "Asia NPP"
+author: "Nick Gauthier"
+date: "6/22/2021"
+output: html_document
+---
+```{r setup, message = FALSE, warning = FALSE}
+# analysis packages
+library(stars) # spatio-temporal raster processing
+library(units) # track raster units
+library(tidyverse) # data manipulation and plotting
+library(tidyEOF) # estimating recurring climate patterns
+
+# visualization pacakges
+library(scico) # color tables
+library(rnaturalearth) # country boundaries
+
+sf_use_s2(FALSE)
+# define the study area
+bbox <- st_bbox(c(xmin = 60, xmax = 150, ymin = -11, ymax = 55), crs = 4326)
+# create a 5' reference raster
+ref <- st_as_stars(bbox, dx = 0.0833333)
+
+# get country boundaries shapefile
+countries <- ne_countries(returnclass = "sf", scale = 'large') %>%
+  st_crop(bbox)
+coasts <- ne_coastline(returnclass = 'sf') %>%
+  st_crop(bbox)
+```
+
+```{r trace-prc-import, cache = TRUE}
+trace_order <- list.files('/Volumes/T7/CHELSA/chelsa_trace/bio12', full.names = FALSE) %>%
+  str_sub(23, -10) %>% 
+  as.numeric() %>% 
+  order()
+
+trace_prc <- list.files('/Volumes/T7/CHELSA/chelsa_trace/bio12', full.names = TRUE)[trace_order] %>%
+  read_stars(along = 'time') %>%
+  st_crop(bbox) %>%
+  st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
+  st_set_dimensions('band', values = seq(-12, 0, 0.1), names = 'time') %>%
+  setNames('prc') %>%
+  mutate(prc = set_units(prc, 'mm'))
+
+trace_tmp <- list.files('/Volumes/T7/CHELSA/chelsa_trace/bio01', full.names = TRUE)[trace_order] %>%
+  read_stars(along = 'time') %>%
+  st_crop(bbox) %>%
+  st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
+  st_set_dimensions('band', values = seq(-12, 0, 0.1), names = 'time') %>%
+  setNames('tmp') %>%
+  mutate(tmp = set_units(tmp, 'degree_C'))
+```
+
+```{r}
+write_stars(trace_prc, 'trace_prc.tif', progress = TRUE)
+write_stars(trace_tmp, 'trace_tmp.tif')
+```
+
+```{r}
+trace_npp <- c(trace_tmp, trace_prc) %>% 
+  st_as_stars() %>%
+  mutate(### the miami model
+         npp_prec = 3000 * (1 - exp(-0.000664 * (prc))),
+         npp_temp = 3000 / (1 + exp(1.315 - 0.119 * (tmp))),
+         npp = set_units(pmin(npp_prec, npp_temp), g/m^2)) %>%
+  select(npp) %>%
+  .[,,,1:119] # focus on preindustrial period
+```
+
+```{r}
+ggplot() +
+  geom_stars(data = (trace_npp[,,,1:4])) +
+  facet_wrap(~time) +
+  scale_fill_viridis_c(trans = 'log') +
+  coord_quickmap()
+```
+ To scale or not to scale:
+ 
+  - unscaled gets you absolute varition in productivity, thus domain wide total energy variations.
+  - but scaled satisfies the traditional adaptationist arguement, that people care most about deviations from local averages
+  - but given the trends here maybe scaling is unjustified because standard deviations are going to be dominated by the trends?
+  
+```{r trace-scree, echo = FALSE}
+trace_npp %>%
+  get_pcs() %>%
+  get_eigenvalues() %>% 
+  plot_scree(k = 1, kmax = 10) +
+  scale_color_brewer(palette = 'Spectral')
+trace_npp %>%
+  transmute(npp = log(npp)) %>%
+  get_pcs() %>%
+  get_eigenvalues() %>% 
+  plot_scree(k = 1, kmax = 10) +
+  scale_color_brewer(palette = 'Spectral')
+trace_npp %>%
+  get_pcs(scale = TRUE) %>%
+  get_eigenvalues() %>% 
+  plot_scree(k = 1, kmax = 10) +
+  scale_color_brewer(palette = 'Spectral')
+trace_npp %>%
+    transmute(npp = log(npp)) %>%
+  get_pcs(scale = TRUE) %>%
+  get_eigenvalues() %>% 
+  plot_scree(k = 1, kmax = 10) +
+  scale_color_brewer(palette = 'Spectral')
+```
+
+```{r}
+trace_patterns <- get_patterns(trace_npp %>% 
+                                 st_set_dimensions('time', values = -120:-2), 
+                               rotate = TRUE, 
+                               scale = TRUE,
+                              k = 6)
+
+trace_corrs <- get_correlation(trace_npp %>% st_set_dimensions('time', values = -120:-2), trace_patterns)
+```
+
+
+```{r}
+ggplot() +
+  geom_stars(data = trace_corrs) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = coasts, fill = NA) +
+  labs(title = 'Leading modes of millennial-scale NPP variability', 
+       subtitle = 'CHELSA V1.2 data, 12kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+
+```{r}
+ggplot() +
+  geom_stars(data = get_correlation(trace_npp%>% st_set_dimensions('time', values = -120:0), get_patterns(trace_npp %>% st_set_dimensions('time', values = -120:0), k = 6, rotate = TRUE))) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = countries, fill = NA) +
+  labs(title = 'Leading modes of millennial-scale NPP variability', 
+       subtitle = 'CHELSA V1.2 data, 9kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+
+```{r}
+plot_amps(get_patterns(trace_npp %>% st_set_dimensions('time', values = -120:0), k = 6, rotate = TRUE)) +
+  scale_x_continuous(breaks = seq(-120, 0, 10), labels = -12:0) +
+  geom_hline(yintercept = 0, linetype = 2)
+
+plot_amps(get_patterns(trace_npp %>% st_set_dimensions('time', values = -120:0), k = 6, rotate = TRUE, scale = TRUE)) +
+  scale_x_continuous(breaks = seq(-120, 0, 10), labels = -12:0) +
+  geom_hline(yintercept = 0, linetype = 2)
+
+
+```
+```{r}
+tra
+```
+
+
+```{r}
+ggplot() +
+  geom_stars(data = get_correlation(trace_npp%>% st_set_dimensions('time', values = -120:0), get_patterns(trace_npp %>% st_set_dimensions('time', values = -120:0), k = 6, rotate = TRUE, scale = TRUE))) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = coasts, fill = NA) +
+  labs(title = 'Leading modes of millennial-scale NPP variability', 
+       subtitle = 'CHELSA V1.2 data, 9kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  theme_bw()
+```
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
