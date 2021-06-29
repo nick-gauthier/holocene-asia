@@ -20,6 +20,7 @@ sf_use_s2(FALSE)
 bbox <- st_bbox(c(xmin = 60, xmax = 150, ymin = -11, ymax = 55), crs = 4326)
 # create a 5' reference raster
 ref <- st_as_stars(bbox, dx = 0.0833333)
+ref2 <- st_as_stars(bbox, dx = 0.25)
 
 # get country boundaries shapefile
 countries <- ne_countries(returnclass = "sf", scale = 'large') %>%
@@ -57,23 +58,53 @@ write_stars(trace_tmp, 'trace_tmp.tif')
 ```
 
 ```{r}
+trace_prc <- read_stars('trace_prc.tif') %>%  
+  setNames('prc') %>%
+    st_set_dimensions('band', values = -120:0, names = 'time')
+
+trace_tmp <- read_stars('trace_tmp.tif')%>%  
+  setNames('tmp') %>%
+    st_set_dimensions('band', values = -120:0, names = 'time')
+```
+
+```{r}
 trace_npp <- c(trace_tmp, trace_prc) %>% 
   st_as_stars() %>%
   mutate(### the miami model
          npp_prec = 3000 * (1 - exp(-0.000664 * (prc))),
          npp_temp = 3000 / (1 + exp(1.315 - 0.119 * (tmp))),
          npp = set_units(pmin(npp_prec, npp_temp), g/m^2)) %>%
-  select(npp) %>%
-  .[,,,1:119] # focus on preindustrial period
+  select(npp) #%>%
+ # .[,,,1:119] # focus on preindustrial period
+```
+
+```{r}
+trace_npp_coarse <- trace_npp %>% 
+  st_warp(ref2, use_gdal = TRUE, method = 'average')%>%  
+  setNames('npp') %>%
+    st_set_dimensions('band', values = -120:0, names = 'time')
+
+trace_npp_coarse <- trace_npp_coarse[,,1:230]
 ```
 
 ```{r}
 ggplot() +
   geom_stars(data = (trace_npp[,,,1:4])) +
   facet_wrap(~time) +
-  scale_fill_viridis_c(trans = 'log') +
+  #scale_fill_viridis_c(trans = 'log') +
+  scale_fill_scico(palette = 'bamako', direction = -1) +
   coord_quickmap()
 ```
+
+```{r}
+ggplot() +
+  geom_stars(data = (trace_npp_coarse[,,,1:4])) +
+  facet_wrap(~time) +
+  #scale_fill_viridis_c(trans = 'log') +
+  scale_fill_scico(palette = 'bamako', direction = -1) +
+  coord_quickmap()
+```
+
  To scale or not to scale:
  
   - unscaled gets you absolute varition in productivity, thus domain wide total energy variations.
@@ -107,14 +138,12 @@ trace_npp %>%
 
 ```{r}
 trace_patterns <- get_patterns(trace_npp %>% 
-                                 st_set_dimensions('time', values = -120:-2), 
-                               rotate = TRUE, 
-                               scale = TRUE,
+                                 st_set_dimensions('time', values = -120:0), 
+                               rotate = TRUE,
                               k = 6)
 
-trace_corrs <- get_correlation(trace_npp %>% st_set_dimensions('time', values = -120:-2), trace_patterns)
+trace_corrs <- get_correlation(trace_npp %>% st_set_dimensions('time', values = -120:0), trace_patterns)
 ```
-
 
 ```{r}
 ggplot() +
@@ -125,32 +154,64 @@ ggplot() +
   labs(title = 'Leading modes of millennial-scale NPP variability', 
        subtitle = 'CHELSA V1.2 data, 12kya-Present',
        x = 'Longitude', y = 'Latitude') +
+  coord_sf(ylim = c(0, 50)) +
+  theme_bw()
+```
+```{r}
+plot_amps(trace_patterns) +
+  scale_x_continuous(breaks = seq(-120, 0, 10), labels = -12:0) +
+  geom_hline(yintercept = 0, linetype = 2)
+```
+
+```{r}
+ggplot() +
+  geom_stars(data = st_apply(trace_tmp, 1:2, function(x) cor(x, trace_patterns$amplitudes %>% select(-time)), .fname = 'PC')) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = coasts, fill = NA) +
+  labs(title = 'Leading modes of millennial-scale NPP variability, temperature correlations', 
+       subtitle = 'CHELSA V1.2 data, 12kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  coord_sf(ylim = c(0, 50)) +
   theme_bw()
 ```
 
 ```{r}
 ggplot() +
-  geom_stars(data = get_correlation(trace_npp%>% st_set_dimensions('time', values = -120:0), get_patterns(trace_npp %>% st_set_dimensions('time', values = -120:0), k = 6, rotate = TRUE))) +
+  geom_stars(data = st_apply(trace_prc, 1:2, function(x) cor(x, trace_patterns$amplitudes %>% select(-time)), .fname = 'PC')) +
   facet_wrap(~PC) +
   scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
-  geom_sf(data = countries, fill = NA) +
-  labs(title = 'Leading modes of millennial-scale NPP variability', 
-       subtitle = 'CHELSA V1.2 data, 9kya-Present',
+  geom_sf(data = coasts, fill = NA) +
+  labs(title = 'Leading modes of millennial-scale NPP variability, precipitation correlations', 
+       subtitle = 'CHELSA V1.2 data, 12kya-Present',
        x = 'Longitude', y = 'Latitude') +
+  coord_sf(ylim = c(0, 50)) +
   theme_bw()
 ```
 
 ```{r}
-plot_amps(get_patterns(trace_npp %>% st_set_dimensions('time', values = -120:0), k = 6, rotate = TRUE)) +
+ggplot() +
+  geom_stars(data = trace_corrs) +
+  facet_wrap(~PC) +
+  scale_fill_scico(palette = 'vik', na.value = NA, name = 'Corr.') +
+  geom_sf(data = coasts, fill = NA) +
+  labs(title = 'Leading modes of millennial-scale NPP variability', 
+       subtitle = 'CHELSA V1.2 data, 12kya-Present',
+       x = 'Longitude', y = 'Latitude') +
+  coord_sf(ylim = c(0, 50)) +
+  theme_bw()
+```
+
+
+
+
+```{r}
+plot_amps(trace_patterns) +
   scale_x_continuous(breaks = seq(-120, 0, 10), labels = -12:0) +
   geom_hline(yintercept = 0, linetype = 2)
-
-plot_amps(get_patterns(trace_npp %>% st_set_dimensions('time', values = -120:0), k = 6, rotate = TRUE, scale = TRUE)) +
-  scale_x_continuous(breaks = seq(-120, 0, 10), labels = -12:0) +
-  geom_hline(yintercept = 0, linetype = 2)
-
 
 ```
+
 ```{r}
 tra
 ```
@@ -169,12 +230,108 @@ ggplot() +
 ```
 
 
-## Including Plots
 
-You can also embed plots, for example:
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+library(gganimate)
+
+a1 <- ggplot() +
+  geom_stars(data = trace_npp_coarse) +
+  transition_manual(time) +
+  #scale_fill_viridis_c(trans = 'log') +
+  scale_fill_scico(palette = 'bamako', direction = -1) +
+  coord_quickmap(ylim = c(0, 50)) +
+  labs(title = 'NPP variability, 12kya-Present', 
+       subtitle = '{current_frame * 0.1}',
+       x = 'Longitude', y = 'Latitude') +
+  theme_minimal()
+
+a2 <- animate(a1, nframes = 121)
+
+anim_save(a2, 'npp.gif')
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# ICA
+
+```{r}
+library(fastICA)
+
+npp_mat <- trace_npp_coarse %>%
+  as_tibble() %>% 
+  pivot_wider(names_from = time, values_from = npp) %>%
+  select(-x, -y) %>%
+  t()
+
+test_ica <- fastICA(npp_mat, 4)
+```
+
+```{r}
+library(h2o)  # for fitting autoencoders
+h2o.init(max_mem_size = "16g")  # initialize H2O instance
+```
+
+```{r}
+data.table::fwrite(npp_mat,file="npp_mat.csv",row.names=FALSE)
+# Convert mnist features to an h2o input data set
+features <- h2o.importFile('npp_mat.csv')
+
+# Train an autoencoder
+ae1 <- h2o.deeplearning(
+  x = seq_along(features)[1:120],
+  training_frame = features[1:120,],
+  autoencoder = TRUE,
+  hidden = c(1),
+  activation = 'Tanh',
+  sparse = TRUE
+)
+```
+```{r}
+ae1_codings <- h2o.deepfeatures(ae1, features[1:120,], layer = 1)
+ae2_codings <- h2o.deepfeatures(ae1, features[1:120,], layer = 2)
+
+plot(as_tibble(ae1_codings))
+plot(as_tibble(ae2_codings))
+
+```
+
+
+```{r}
+as_tibble(ae1_codings) %>%
+  mutate(time = (-120:-1)/10) %>%
+  pivot_longer(-time) %>%
+  ggplot(aes(time, value * -1)) +
+  geom_line() + 
+  geom_hline(yintercept = 0, linetype = 2) +
+  facet_wrap(~name) +
+  scale_x_continuous(breaks = -12:-1) +
+  theme_bw()
+```
+```{r}
+df <- as_tibble(ae1_codings)
+ggplot() +
+  geom_stars(data = st_apply(trace_npp_coarse[,,,1:120], 1:2, function(x) cor(x, df[,1]), .fname = 'DF')) +
+  facet_wrap(~DF) +
+    scale_fill_scico(palette = 'vik', direction = -1) +
+geom_sf(data = coasts) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(df, aes(seq(-12, -.1, .1), DF.L1.C1 * -1)) +
+  geom_line() +
+  geom_smooth()
+```
+```{r}
+m1 <- df %>%
+  mutate(time = seq(-12,-.1, .1),
+         var = DF.L1.C1 * -1)%>%
+  mgcv::gam(var ~ s(time), data = .)
+```
+
+```{r}
+qplot(x = seq(-12,-.1, .1), y = residuals(m1), geom = 'line') +
+  scale_x_continuous(breaks = -12:-1) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  theme_bw()
+```
+
