@@ -1,0 +1,73 @@
+---
+title: "Tibet Pollen"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(sf)
+```
+
+```{r}
+modern <- read_excel('~/Downloads/pollen sites modern China - old+new collection in press.xlsx') %>%
+  st_as_sf(coords = c(4,5))
+
+fossil <- read_excel('~/Downloads/pollen sites fossil China - Ni 2014 palaeo3.xlsx') %>%
+  st_as_sf(coords = c(8,9))
+```
+
+```{r}
+plot(modern)
+```
+
+```{r}
+plot(fossil)
+```
+
+```{r}
+head(modern)
+```
+
+```{r}
+count(modern, `Sample type`) %>%
+ggplot(aes(reorder(`Sample type`, n), n)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  labs(title = 'Modern pollen sample distribution', y = 'Count', x = 'Sample type')
+```
+
+```{r}
+count(modern, `Data source`) %>%
+ggplot(aes(reorder(`Data source`, n), n)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  labs(title = 'Modern pollen data sources', y = 'Count', x = 'Data source')
+```
+
+```{r}
+count(modern, `Data type`) %>%
+ggplot(aes(reorder(`Data type`, n), n)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  labs(title = 'Modern pollen data type', y = 'Count', x = 'Data type')
+```
+
+```{r}
+count(modern, `Modern vegetation information (sample and its surroundings)`) %>%
+ggplot(aes(reorder(`Modern vegetation information (sample and its surroundings)`, n), n)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  labs(title = 'Modern pollen data type', y = 'Count', x = 'Data type')
+```
+
+```{r}
+modern
+```
+
+
+
