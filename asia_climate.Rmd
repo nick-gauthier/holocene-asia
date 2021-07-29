@@ -2,11 +2,13 @@
 title: "Asian climate variability through the Holocene"
 author: "Nick Gauthier"
 date: "7/29/2021"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 
-An analysis of present and past temperature and precipitation variability across east and southeast using the ERA-Land reanalysis and [CHELSA-TraCE downscaled climate data](https://chelsa-climate.org). 
+An analysis of present and past temperature and precipitation variability across east and southeast using the [ERA5-Land reanalysis](https://www.ecmwf.int/en/era5-land) and [CHELSA-TraCE downscaled climate data](https://chelsa-climate.org). 
 
 ```{r setup, message = FALSE, warning = FALSE, include = FALSE}
 # analysis packages
@@ -47,7 +49,7 @@ We'll first look at monthly averages of of the underlying hourly model to examin
 
 ## Seasonal variability
 
-Nearly 90% of the month-to-month temperature variability can be explained by two patterns. A domain-wide pattern with positive loadings in the north and east asia and negative loadings in New Guinea, and a more restricted pattern centered on India and southeast Asia. A third pattern is focused on Indonesia. The trailing patterns (not shown) reflect more complex breakdowns of this basic pattern, likely reflecting other atmospheric influences such as precipitation, but don't contribute much to the overall variance.
+Nearly 90% of the month-to-month temperature variability can be explained by two patterns. A domain-wide pattern with positive loadings in the north and east Asia and negative loadings in New Guinea, and a more restricted pattern centered on India and southeast Asia. A third pattern is focused on Indonesia. The trailing patterns (not shown) reflect more complex breakdowns of this basic pattern, likely reflecting other atmospheric influences such as precipitation, but don't contribute much to the overall variance.
 
 
 ```{r, warning = FALSE}
@@ -155,7 +157,6 @@ ggplot() +
 ggplot() +
   geom_stars(data = st_apply(era_tmp, 1:2, sd, na.rm = TRUE)) +
   scale_fill_viridis_c(option = 'magma', name = '°C', na.value = NA) +
-  #geom_sf(data = countries, fill = NA) +
   geom_sf(data = coasts, fill = NA) +
   labs(title = 'Mean annual temperature SD', 
        subtitle = 'ERA-Land Reanalysis, 1981-2020',
@@ -211,6 +212,7 @@ The Miami model of Helmut Lieth characterizes climatic potential net primary pro
 $$NPP_{precip} = 3000(1 - e^{-0.000664 P})$$ 
 
 $$NPP_{temp} = \frac{3000}{1 + e^{1.315-0.119T}}$$
+
 We'll apply this model to 40-year ERA-Land temperature and precipitation data.
 
 ```{r}
@@ -219,10 +221,7 @@ era_npp <- c(era_pr, era_tmp) %>%
   ### the miami model
   mutate(npp_prec = 3000 * (1 - exp(-0.000664 * (tp))),
          npp_temp = 3000 / (1 + exp(1.315 - 0.119 * (t2m))),
-         npp = set_units(pmin(npp_prec, npp_temp), g/m^2),
-         tmp = set_units(t2m, 'degree_C'),
-         prc = set_units(tp, 'mm')) %>%
-  select(-npp_prec, -npp_temp)  %>%
+         npp = set_units(pmin(npp_prec, npp_temp), g/m^2)) %>%
   select(npp)
 ```
 
@@ -243,7 +242,10 @@ Now the question is how well does NPP predict rainfed rice yields?
 
 # Past Climate
 
+Now we'll use downscaled outputs from the TraCE-21ka simulation, a transient simulation of the Last Glacial Maximum to present using CCSM3. The primary forcings are insolation, meltwater, green house gasses, and land cover change.
+
 ```{r trace-prc-import, cache = TRUE, include=FALSE, eval = FALSE}
+# load and reproject the CHELSA-TraCE data. not run by default becuase its slow!
 trace_order <- list.files('/Volumes/T7/CHELSA/chelsa_trace/bio12', 
                           full.names = FALSE) %>%
   str_sub(23, -10) %>% 
@@ -269,7 +271,7 @@ write_stars(trace_tmp, 'trace_tmp.tif')
 ```
 
 
-```{r}
+```{r, echo=FALSE}
 trace <- read_stars(c('trace_tmp.tif', 'trace_prc.tif')) %>%  
   setNames(c('tmp', 'prc')) %>%
   st_set_dimensions('band', values = -120:0, names = 'time') %>%
@@ -285,17 +287,14 @@ trace <- read_stars(c('trace_tmp.tif', 'trace_prc.tif')) %>%
 
 
 So the leading precipitation pattern explains 59% and 20%. The next two are a multiplet explaining 5% and 4% respectively. So look at the leading 2 modes separately, then try rotating at 4, 5, and 7 to see what those other features are.
+
 ```{r}
 plot_scree(trace['prc'], k = 1, kmax = 10, scale = TRUE)
 ```
 
 ```{r, echo = FALSE}
 p1 <- get_patterns(trace['prc'], k = 2, scale = TRUE)
-p2 <- get_patterns(trace['prc'], k = 7, scale = TRUE)
-p3 <- get_patterns(trace['prc'], k = 2, scale = TRUE, rotate = TRUE)
-p4 <- get_patterns(trace['prc'], k = 4, scale = TRUE, rotate = TRUE)
-p5 <- get_patterns(trace['prc'], k = 5, scale = TRUE, rotate = TRUE)
-p6 <- get_patterns(trace['prc'], k = 7, scale = TRUE, rotate = TRUE)
+p2 <- get_patterns(trace['prc'], k = 5, scale = TRUE, rotate = TRUE)
 ```
 
 
@@ -309,10 +308,11 @@ plot_amps(p1, scaled = FALSE, events = c(-82, -62))+ scale_x_continuous(breaks =
 So the leading two patterns are something like the monsoon system. But how do they separate? the first could be the main pattern and the second could be northward and southern shifts? So like how strong it is and its position?
 
 
-```{r, echo = FALSE}
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
 plot_eofs(p1) +
   geom_sf(data = coasts) +
-  scale_fill_distiller(palette = 'BrBG', direction = 1)
+  scale_fill_distiller(palette = 'BrBG', direction = 1, limits = c(-1, 1)) +
+  ggtitle('Leading modes of century-scale precipitation variability', 'CHELSA-TraCE, 12ka to Present')
 ```
 PC1 is a long-term drying trend. PC2 is a period of expansion in the mid holocene. So the purple areas in PC2 are where you'd look for shifting niches of rainfed crops.
 
@@ -320,7 +320,7 @@ PC1 is a long-term drying trend. PC2 is a period of expansion in the mid holocen
 ggplot() +
   geom_stars(data = p1$eofs[,,,2] %>% st_crop(esea)) +
   geom_sf(data = coasts %>% st_crop(esea)) +
-  scale_fill_distiller(palette = 'BrBG', direction = 1) +
+  scale_fill_distiller(palette = 'BrBG', direction = 1, limits = c(-1,1)) +
   theme_bw() +
   labs(x = 'Longitude', y ='Latitude')
 ```
@@ -328,12 +328,10 @@ ggplot() +
 What do the remaining EOFs look like? Try rotating the top and 4, 5, and 6 and see what happens. Ok the leading 2 EOFs are the same in everything so we can ignore them for now.
 
 ```{r, echo = FALSE}
-plot_eofs(p4) +
-  geom_sf(data = coasts) +
-  scale_fill_distiller(palette = 'BrBG')
 plot_eofs(p2) +
   geom_sf(data = coasts) +
-  scale_fill_distiller(palette = 'BrBG')
+    scale_fill_distiller(palette = 'BrBG', direction = 1, limits = c(-1, 1)) +
+  ggtitle('Leading modes of century-scale precipitation variability', 'CHELSA-TraCE, 12ka to Present')
 ```
 Rotating all 7 puts the recent swings in their own PCs, for which the spatial patterns are an interesting dipole in China and the Philippines and another center in central Asia. The China/Philippines dipole comes up recently and looks like a recent change post 1500 CE that reverses post 1800 CE. Maybe land use change and green house gas forcing? Then PC6 is mostly GHG forcing -- drying in Central Asia and intensifying monsoon in India? PC7 looks like noise. PC4 is only seen in the early Holocene and looks like meltwater forcing, but its expressed in west India and Pakistan. PC3 is the "anomalous" TraCE geography change at 6.2ka from the Indonesian Throughlow. 
 
@@ -341,9 +339,8 @@ So those patterns continue when we go down to 5 patterns. We loose the noise PC,
 
 Going to 4 it looks like the main difference is it combines the Indonesian Throughlflow stuff with the modern GHG climate change . . . although the Indonesian Throughflow is involved in that as well so its not unreasonable. So all in all 4 is a good compression, although we might go with 5 to distinguish the different TraCE forcings influencing the IT.
 
-```{r}
+```{r, echo = FALSE}
 plot_amps(p2, scaled = FALSE) + scale_x_continuous(breaks = seq(-120, 0, 10), labels = -12:0)
-plot_amps(p5, scaled = FALSE) + scale_x_continuous(breaks = seq(-120, 0, 10), labels = -12:0)
 ```
 
 
@@ -352,58 +349,56 @@ According to Fuzhi et al. 2019 GHG overcame orbital forcing at ~5.5ka and GHG be
 ## Temperature
 
 Let's look at the leading pattern alone, then rotated with the top 3 and 4.
-```{r}
+```{r, echo = FALSE, include=FALSE}
 plot_scree(trace['tmp'], k = 1, kmax = 10, scale = TRUE)
 ```
 
 The temperature estimates seems to be overpowered by the Sunda Shelf adjustment.
 
-```{r}
+```{r echo = FALSE, warning=FALSE, message = TRUE}
 t1 <- get_patterns(trace['tmp'], k = 4, scale = TRUE, rotate = FALSE) 
 plot_eofs(t1) + geom_sf(data = coasts)
 plot_amps(t1, scale = FALSE)
 ```
 
-PC3 (rotated) is GHG forcing, PC1 is some mix of indonesian and insolation warming. PC2 almost looks like the monsoon/rainfall signal --  or better yet the ice sheets
+PC3 (rotated) is GHG forcing, PC1 is some mix of Indonesian Throughlfow and insolation warming. PC2 almost looks like the monsoon/rainfall signal --  or better yet the ice sheets
 
 But you'll notice from the unrotated unscaled pcs, the indonesian throughlow is taking up most of the variance
 
 So the sudden indonesian thruflow has a big effect on temperature. So you could either interpret these maps as saying that the sd does vary markedly over the domain (particularly in indonesia) so you need to standardize. But also you could say the trends are obviously quite coarse, so standardizing might loose some interesting spatial patterning?
 
 ```{r, echo = FALSE}
-ggplot() +
-  geom_stars(data = get_climatology(trace['tmp'])['mean']) +
-  scale_fill_viridis_c(option = 'magma')
-ggplot() +
-  geom_stars(data = get_climatology(trace['tmp'])['sd']) +
-  scale_fill_viridis_c(option = 'magma') +
-    geom_sf(data = coasts, color = 'white')
+# ggplot() +
+#   geom_stars(data = get_climatology(trace['tmp'])['mean']) +
+#   scale_fill_viridis_c(option = 'magma')
+# ggplot() +
+#   geom_stars(data = get_climatology(trace['tmp'])['sd']) +
+#   scale_fill_viridis_c(option = 'magma') +
+#     geom_sf(data = coasts, color = 'white')
 
 ggplot() +
   geom_stars(data = trace['tmp',,,121] - trace['tmp',,,1]) +
     scale_fill_viridis_c(option = 'magma') +
- # scale_fill_distiller(palette = 'RdBu', limits = c(-7.5, 7.5)) +
   geom_sf(data = coasts) +
   labs(title = 'Temperature change, 12k to Present')
 ```
 
 
 ```{r, echo = FALSE}
-ggplot() +
-  geom_stars(data = get_climatology(trace['prc'])['mean']) +
-  scale_fill_viridis_c(option = 'viridis') +
-      geom_sf(data = coasts, color = 'white')
-ggplot() +
-  geom_stars(data = get_climatology(trace['prc'])['sd']) +
-  scale_fill_viridis_c(option = 'viridis') +
-    geom_sf(data = coasts, color = 'white')
+# ggplot() +
+#   geom_stars(data = get_climatology(trace['prc'])['mean']) +
+#   scale_fill_viridis_c(option = 'viridis') +
+#       geom_sf(data = coasts, color = 'white')
+# ggplot() +
+#   geom_stars(data = get_climatology(trace['prc'])['sd']) +
+#   scale_fill_viridis_c(option = 'viridis') +
+#     geom_sf(data = coasts, color = 'white')
 
 ggplot() +
   geom_stars(data = trace['prc',,,121] - trace['prc',,,1]) +
- #   scale_fill_viridis_c(option = 'magma') +
  scale_fill_distiller(palette = 'BrBG', limits = c(-1400, 1400), direction = 1) +
   geom_sf(data = coasts) +
-  labs(title = 'Preciptiation change, 12k to Present')
+  labs(title = 'Precipitation change, 12k to Present')
 ```
 
 ## Phase plot of temperature and precipitation PCs 
@@ -420,7 +415,7 @@ phase2 <- left_join(get_patterns(trace['prc'], k = 1, scale = TRUE)$amplitudes,
 
 
 
-So we have early and late holocene equilibria. so does the precip thing translate to a northward/southward migration of the monsoon belt?
+So we have early and late Holocene equilibria. General warming trend, punctuated by southward shift of the monsoon.
 ```{r, echo = FALSE, fig.width = 3, fig.asp = 1.2}
 library(ggrepel)
 ggplot(phase, aes(PC1.x, PC1.y)) +
@@ -432,3 +427,10 @@ ggplot(phase, aes(PC1.x, PC1.y)) +
   scale_color_distiller(palette = 'Spectral') +
   theme_bw()
 ```
+
+# Next Steps
+
+1. Connect climate variables to (rice) crop growth.
+2. Seasonal reconstructions.
+3. Expand to Mid Holocene and Last Millennium PMIP simulations.
+
