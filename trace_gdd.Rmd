@@ -10,47 +10,89 @@ knitr::opts_chunk$set(echo = TRUE)
 library(stars)
 library(tidyverse)
 bbox <- st_bbox(c(xmin = 60, xmax = 150, ymin = -11, ymax = 55), crs = 4326)
+ref <- st_as_stars(bbox, dx = 0.5)
+library(future)
+library(tidyEOF)
+coasts <- rnaturalearth::ne_coastline(returnclass = 'sf') %>%
+  st_crop(bbox)
 ```
 
 ```{r}
-test <- read_stars('~/Downloads/trace.36.400BP-1990CE.cam2.h0.TREFHT.2160101-2204012.nc',
-                  sub = 'TREFHT')  %>%
-  setNames('TREFHT') %>%
-  mutate(TREFHT = units::set_units(TREFHT, degree_C)) %>%
-  st_set_crs(4326) %>%
-  st_crop(bbox)
+trace <- list.files('~/Downloads/drive-download-20210831T213234Z-001', full.names = TRUE) %>%
+  map(~read_ncdf(., var = 'TREFHT', eps = 0.01) %>% st_crop(bbox)) %>%
+  do.call(c, .) %>%
+  mutate(TREFHT = units::set_units(TREFHT, 'degree_C')) %>%
+  st_set_dimensions( names = c('x', 'y', 'time'))
+```
+# GDD calculation
 
-read_ncdf('~/Downloads/trace.01-36.22000BP.clm2.TREFMXAV.22000BP_decavg_400BCE.nc', var = 'TREFMXAV')
+```{r}
+gdd_monthly <- function(rast, base = 10, parallel = FALSE) {
+  st_apply(rast, c('x', 'y'),
+    FUN = function(temps) {
+      nmonths <- length(temps)
+      nyears <- nmonths / 12
+      ndays <- nyears * 365
+      
+      month_days <-
+        unlist(map((1:nyears - 1) * 365,
+                   ~ . + c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349)
+        ))
+      
+      spline(month_days, temps, xout = 1:ndays) %>%
+        as_tibble() %>%
+        mutate(year = (x - 1) %/% 365) %>%
+        group_by(year) %>%
+        summarise(gdd = reduce(y,~ { new <- .y - base 
+                              if(new < 0) .x else .x + new },
+                               .init = 0)) %>%
+        pull(gdd)
+    }, FUTURE = parallel, .fname = 'time'
+  ) %>%
+    aperm(c(2, 3, 1)) %>%
+    setNames('GDD') %>%
+    mutate(GDD = units::set_units(GDD, 'degree_C')) %>%
+    setNames(paste0('GDD', base))
+}
 ```
 
+```{r}
+plan(multisession)
+trace_gdd <- gdd_monthly(trace, parallel = TRUE)
+plan(sequential)
+```
+
+
+```{r}
+ggplot() + geom_stars( data = trace_gdd_coarse[,,,1:10]) + facet_wrap(~time) + scale_fill_viridis_c(option = 'magma')
+
+ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, mean)) + scale_fill_viridis_c(option = 'magma')
+ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, sd)) + scale_fill_viridis_c(option = 'magma')
+
+```
+## Mode of variability
+```{r}
+plot_scree(trace_gdd, k = 4)
+```
+
+```{r}
+gdd_pat <- get_patterns(trace_gdd, k = 4)
+plot_eofs(gdd_pat, scaled = TRUE, rawdata = trace_gdd) + geom_sf(data = coasts); plot_amps(gdd_pat, scaled = FALSE);plot_eofs(gdd_pat) + geom_sf(data = coasts)
+```
+Focus on the last 4,000 years
+
+```{r}
+gdd_pat_4k <- get_patterns(trace_gdd[,,,4540:8000], k = 4)
+plot_eofs(gdd_pat_4k) + geom_sf(data = coasts); plot_amps(gdd_pat_4k, scaled = FALSE)
+```
+
+## Exploring ways of pseudo-daily interpolation from monthly averages
 ```{r}
 library(mgcv)
-test2 <- test[,1,1] %>% as_tibble() %>% mutate(time = ((1:5280) / 12) - 1/12, year = floor(time), doy = rep(c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349), 440), test = year + doy / 365) %>%
+test2 <- trace[,1,1] %>% as_tibble() %>% mutate(time = ((1:5280) / 12) - 1/12, year = floor(time), doy = rep(c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349), 440), test = year + doy / 365) %>%
   units::drop_units() 
 ```
 
-```{r}
-library(RMAWGEN)
-
-test2 %>%
-  dplyr::select(doy, TREFHT) %>%
-  mutate(year = rep(1:440, each = 12)) %>%
- # pivot_wider(names_from = doy, values_from = TREFHT) %>%
-  filter(year == 1)
-  dplyr::select(-year) %>%
-  as.matrix() %>% t %>%
-splineInterpolateMonthlytoDailyforSeveralYears(start_year = 0, nyear = 440, leap = FALSE, yearly = F)
-```
-
-```{r}
-(0.5:11.5) * 365/12
-```
-
-
-```{r}
-as.matrix(cbind(1 *
-  (0.5:11.5) * 365/12, 2 * (0.5:11.5) * 365/12))
-```
 
 ```{r}
 test3 <- test2[1:12,] %>% dplyr::select(TREFHT) %>% mutate(doy = (0.5:11.5) * 365/12)
@@ -80,38 +122,8 @@ ggplot(data = test3, aes(doy, TREFHT))+
   geom_point() +
   geom_line(data = as_tibble(spline(test3$doy, test3$TREFHT, xout = 1:365, method = 'periodic')), aes(x = x, y = y), color = 'green')
 ```
-```{r}
-
-input <- test[,1,1] %>% c
 
 
-month_days <- c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349)
-
-days <- map((0:439) * 365, ~. + month_days) %>%
-  unlist() 
-
-temp <- units::drop_units(as_tibble(test[,1,1])$TREFHT)
-
-gdd <- function(x, y, base = 10) {
-  new <- y - base
-  if(new < 0) x else x + new
-}
-
-gdd_test <- spline(days, temp, xout = 1:(length(temp) / 12 * 365)) %>%
-  as_tibble() %>%
-  mutate(year = (x-1)%/% 365) %>%
-  group_by(year) %>%
-  summarise(test = reduce(y, gdd)) 
-
-ggplot(gdd_test, aes(year, test)) + geom_line()
-```
-
-```{r}
-test[,1,1] %>% as_tibble() %>% units::drop_units() %>%
-  dplyr::select(TREFHT) %>%
-  mutate(day = 1:n(),
-         doy = rep(1:365, 440))
-```
 
 
 ```{r}
