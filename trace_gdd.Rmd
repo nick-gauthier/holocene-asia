@@ -71,7 +71,7 @@ ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, sd)) + scale_fill_viridis
 #ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, sd) / st_apply(trace_gdd, 1:2, mean)) + scale_fill_viridis_c(option = 'magma', trans = 'log') + geom_sf(data = coasts)
 ```
 ```{r}
-ggplot() + geom_stars( data = st_apply(trace_gdd[,,,8440:8540], 1:2, function(x) sum(x > 2900) / length(x))) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts)
+ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, function(x) sum(x > 2900) / length(x))) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts) + theme_void()
 ```
 
 
@@ -84,12 +84,27 @@ plot_scree(trace_gdd, k = 4)
 gdd_pat <- get_patterns(trace_gdd, k = 4)
 plot_eofs(gdd_pat, scaled = TRUE, rawdata = trace_gdd) + geom_sf(data = coasts); plot_amps(gdd_pat, scaled = FALSE);plot_eofs(gdd_pat) + geom_sf(data = coasts)
 ```
-Focus on the last 4,000 years
+Focus on the last 5,000 years
 
 ```{r}
-gdd_pat_4k <- get_patterns(trace_gdd[,,,4540:8000], k = 4)
-plot_eofs(gdd_pat_4k, scaled = TRUE, rawdata = trace_gdd[,,,4540:8000]) + geom_sf(data = coasts); plot_amps(gdd_pat_4k, scaled = FALSE)
+gdd_pat_5k <- get_patterns(trace_gdd[,,,3540:8000], k = 4)
+plot_eofs(gdd_pat_5k, scaled = TRUE, rawdata = trace_gdd[,,,3540:8000]) + geom_sf(data = coasts); plot_amps(gdd_pat_5k, scaled = FALSE)
 ```
+```{r}
+plan(multisession)
+trace_gdd5 <- gdd_monthly(trace, base = 5, parallel = TRUE)%>% st_set_dimensions('time', values = seq(-8.5, 0.039, 0.001))
+plan(sequential)
+```
+
+```{r}
+gdd_pat5_5k <- get_patterns(trace_gdd5[,,,3540:8000], k = 4)
+plot_eofs(gdd_pat5_5k, scaled = TRUE, rawdata = trace_gdd5[,,,3540:8000]) + geom_sf(data = coasts); plot_amps(gdd_pat5_5k, scaled = FALSE)
+```
+
+```{r}
+ggplot() + geom_stars( data = st_apply(trace_gdd5, 1:2, function(x) sum(x > 1200) / length(x))) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts) + theme_void()
+```
+
 ## Rice Niche
 
 ```{r}
@@ -175,6 +190,7 @@ ggplot() + geom_stars(data = niche[,,,1] == niche[,,,7]) + facet_wrap(~time) + s
 ```{r}
 ggplot() + geom_stars(data = chels_new[,,,7] - chels_new[,,,1]) + geom_sf(data = coasts) + scale_fill_viridis_c(option = 'magma') + ggtitle('Growing degree days at 6ka', 'change from present values') + theme_void()
 ```
+
 ```{r}
 chelsa_full_gdd <- c('_-40_V1', '_20_V1') %>%
   map(~{tasmax <- list.files('~/Downloads/CHELSA_TRACE_tasmax', pattern = ., full.names = TRUE)[c(1,5:12, 2:4)] %>%
