@@ -10,10 +10,12 @@ knitr::opts_chunk$set(echo = TRUE)
 library(stars)
 library(tidyverse)
 bbox <- st_bbox(c(xmin = 60, xmax = 150, ymin = -11, ymax = 55), crs = 4326)
-ref <- st_as_stars(bbox, dx = 0.5)
+ref <- st_as_stars(bbox, dx = 0.1)
 library(future)
 library(tidyEOF)
 coasts <- rnaturalearth::ne_coastline(returnclass = 'sf') %>%
+  st_crop(bbox)
+countries <- rnaturalearth::ne_countries(returnclass = "sf", scale = 'large') %>%
   st_crop(bbox)
 ```
 
@@ -58,18 +60,21 @@ gdd_monthly <- function(rast, base = 10, parallel = FALSE) {
 
 ```{r}
 plan(multisession)
-trace_gdd <- gdd_monthly(trace, parallel = TRUE)
+trace_gdd <- gdd_monthly(trace, parallel = TRUE)%>% st_set_dimensions('time', values = seq(-8.5, 0.039, 0.001))
 plan(sequential)
 ```
 
 
 ```{r}
-ggplot() + geom_stars( data = trace_gdd_coarse[,,,1:10]) + facet_wrap(~time) + scale_fill_viridis_c(option = 'magma')
-
-ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, mean)) + scale_fill_viridis_c(option = 'magma')
-ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, sd)) + scale_fill_viridis_c(option = 'magma')
-
+ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, mean)) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts)
+ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, sd)) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts)
+#ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, sd) / st_apply(trace_gdd, 1:2, mean)) + scale_fill_viridis_c(option = 'magma', trans = 'log') + geom_sf(data = coasts)
 ```
+```{r}
+ggplot() + geom_stars( data = st_apply(trace_gdd[,,,8440:8540], 1:2, function(x) sum(x > 2900) / length(x))) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts)
+```
+
+
 ## Mode of variability
 ```{r}
 plot_scree(trace_gdd, k = 4)
@@ -83,24 +88,135 @@ Focus on the last 4,000 years
 
 ```{r}
 gdd_pat_4k <- get_patterns(trace_gdd[,,,4540:8000], k = 4)
-plot_eofs(gdd_pat_4k) + geom_sf(data = coasts); plot_amps(gdd_pat_4k, scaled = FALSE)
+plot_eofs(gdd_pat_4k, scaled = TRUE, rawdata = trace_gdd[,,,4540:8000]) + geom_sf(data = coasts); plot_amps(gdd_pat_4k, scaled = FALSE)
+```
+## Rice Niche
+
+```{r}
+tasmax <- list.files('~/Downloads/CHELSA_TRACE_tasmax', pattern = '_20_V1', full.names = TRUE)[c(1,5:12, 2:4)] %>%
+  read_stars(along = 'time') 
+
+tasmin <- list.files('~/Downloads/CHELSA_TRACE_tasmin', pattern = '_20_V1', full.names = TRUE)[c(1,5:12, 2:4)] %>%
+  read_stars(along = 'time')
+
+st_as_stars(tasmin)
+
+temp <- ((tasmin + tasmax) / 2) %>% # average and reduce 10 multiplier
+  st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
+  st_set_dimensions('band', values = 1:12, names = 'time') %>%
+  setNames('temp') %>%
+  mutate(temp = units::set_units(temp/10, 'kelvin') %>% units::set_units('degree_C'))
+```
+
+
+
+```{r}
+plan(multisession)
+gdd_clim <- function(rast, base = 10, parallel = FALSE) {
+  daily <- st_apply(rast, c('x', 'y'),
+    FUN = function(temps) {
+      
+      month_days <- c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349)
+      
+      spline(month_days, temps, xout = 1:365) %>%
+        as_tibble() %>%
+        summarise(gdd = reduce(y,~ { new <- .y - base 
+                              if(new < 0) .x else .x + new },
+                               .init = 0)) %>%
+        pull(gdd)
+    }, FUTURE = parallel, .fname = 'time'
+  ) %>%
+    setNames('GDD') %>%
+    mutate(GDD = units::set_units(GDD, 'degree_C')) %>%
+    setNames(paste0('GDD', base))
+}
+
+test <- gdd_clim(temp, parallel = TRUE)
+plan(sequential)
+```
+
+
+```{r}
+chelsa_trace_gdd <- c('_-40_V1', '_-30_V1', '_-20_V1', '_-10_V1', '_0_V1', '_10_V1', '_20_V1') %>%
+  map(~{tasmax <- list.files('~/Downloads/CHELSA_TRACE_tasmax', pattern = ., full.names = TRUE)[c(1,5:12, 2:4)] %>%
+    read_stars(along = 'time') 
+  
+  tasmin <- list.files('~/Downloads/CHELSA_TRACE_tasmin', pattern = ., full.names = TRUE)[c(1,5:12, 2:4)] %>%
+    read_stars(along = 'time')
+  
+  ((tasmin + tasmax) / 2) %>% # average and reduce 10 multiplier
+    st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
+    st_set_dimensions('band', values = 1:12, names = 'time') %>%
+    setNames('temp') %>%
+    mutate(temp = units::set_units(temp/10, 'kelvin') %>% units::set_units('degree_C')) %>%
+    gdd_clim(parallel = TRUE)
+  })
+```
+
+```{r}
+chels_new <- do.call(c, c(chelsa_trace_gdd, along = 'time')) %>% st_set_dimensions('time', values = -6:0)
+```
+
+```{r}
+plot(units::drop_units(chels_new) > 2900)
+```
+
+```{r}
+ggplot() + geom_stars(data = chels_new) + facet_wrap(~time) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts) + theme_void()
+```
+
+```{r}
+niche <- units::drop_units(chels_new %>% st_crop(countries)) > 2900
+ggplot() + geom_stars(data = niche) + facet_wrap(~time) + scale_fill_viridis_d(option = 'magma')+ geom_sf(data = coasts) + theme_void()
+
+ggplot() + geom_stars(data = niche[,,,1] == niche[,,,7]) + facet_wrap(~time) + scale_fill_viridis_d(option = 'magma')+ geom_sf(data = coasts) + theme_void()
+```
+
+```{r}
+ggplot() + geom_stars(data = chels_new[,,,7] - chels_new[,,,1]) + geom_sf(data = coasts) + scale_fill_viridis_c(option = 'magma') + ggtitle('Growing degree days at 6ka', 'change from present values') + theme_void()
+```
+```{r}
+chelsa_full_gdd <- c('_-40_V1', '_20_V1') %>%
+  map(~{tasmax <- list.files('~/Downloads/CHELSA_TRACE_tasmax', pattern = ., full.names = TRUE)[c(1,5:12, 2:4)] %>%
+    read_stars(along = 'time') 
+  
+  tasmin <- list.files('~/Downloads/CHELSA_TRACE_tasmin', pattern = ., full.names = TRUE)[c(1,5:12, 2:4)] %>%
+    read_stars(along = 'time')
+  
+  ((tasmin + tasmax) / 2) %>% # average and reduce 10 multiplier
+    st_warp(dest = ref <- st_as_stars(bbox, dx = 0.05), use_gdal = TRUE, method = 'average') %>%
+    st_set_dimensions('band', values = 1:12, names = 'time') %>%
+    setNames('temp') %>%
+    mutate(temp = units::set_units(temp/10, 'kelvin') %>% units::set_units('degree_C')) %>%
+    gdd_clim(parallel = TRUE)
+  }) %>%
+  do.call(c, .) %>%
+  merge() %>%
+      st_crop(countries)
+```
+
+```{r}
+niche_fine <- chelsa_full_gdd %>% split() %>% transmute(niche = case_when(GDD10 > 2900 & GDD10.1 > 2900 ~ 'both',
+                                                         GDD10 > 2900 & GDD10.1 <= 2900 ~ 'MH only',
+                                                         GDD10 <= 2900 & GDD10.1 > 2900 ~ 'Present only',
+                                                         GDD10 <= 2900 &GDD10.1 <= 2900 ~ 'Neither'))
+ggplot() + geom_stars(data = niche_fine) + scale_fill_viridis_d(option = 'magma')+ geom_sf(data = coasts) + theme_void()
 ```
 
 ## Exploring ways of pseudo-daily interpolation from monthly averages
 ```{r}
 library(mgcv)
-test2 <- trace[,1,1] %>% as_tibble() %>% mutate(time = ((1:5280) / 12) - 1/12, year = floor(time), doy = rep(c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349), 440), test = year + doy / 365) %>%
+test2 <- trace[,1,1,1:5280] %>% as_tibble() %>% mutate(time = ((1:5280) / 12) - 1/12, year = floor(time), doy = rep(c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349), 440), test = year + doy / 365) %>%
   units::drop_units() 
 ```
 
 
 ```{r}
-test3 <- test2[1:12,] %>% dplyr::select(TREFHT) %>% mutate(doy = (0.5:11.5) * 365/12)
-test3
+test3 <- test2[13:24,] %>% dplyr::select(TREFHT) %>% mutate(doy = (0.5:11.5) * 365/12)
 ```
 
 ```{r}
-testgam <- gam(TREFHT ~ s(doy, bs = 'cc', k = 12), knots = list(doy = c(1, 366)), data = test3)
+testgam <- mgcv::gam(TREFHT ~ s(doy, bs = 'cc', k = 12), knots = list(doy = c(1, 366)), data = test3)
 
 gam_line <- tibble(doy = 1:365) %>%
   mutate(TREFHT = predict(testgam, .))
@@ -111,21 +227,28 @@ gam_line %>%
   group_by(month) %>%
   summarise(test = mean(TREFHT)) %>%
   left_join(test3 %>% mutate(month = 1:12)) %>%
-  mutate(resid = TREFHT - test) %>%
+  mutate(resid = TREFHT - test)
   
 
 ```
+
 ```{r}
 ggplot(data = test3, aes(doy, TREFHT))+
   geom_line() +
   geom_line(data = gam_line, color = 'red') +
   geom_point() +
-  geom_line(data = as_tibble(spline(test3$doy, test3$TREFHT, xout = 1:365, method = 'periodic')), aes(x = x, y = y), color = 'green')
+  geom_line(data = as_tibble(spline(test3$doy, test3$TREFHT, xout = 1:365, method = 'periodic')), aes(x = x, y = y), color = 'green') +
+    geom_line(data = as_tibble(spline(test3$doy, test3$TREFHT, xout = 1:365, method = 'fmm')), aes(x = x, y = y), color = 'blue') +
+    geom_line(data = as_tibble(spline(test3$doy, test3$TREFHT, xout = 1:365, method = 'natural')), aes(x = x, y = y), color = 'orange')
+```
+```{r}
+ggplot() + geom_stars(data = trace[,,,1:12]) + facet_wrap(~time) + scale_fill_viridis_c(option = 'magma')
 ```
 
 
-
-
+source: https://stats.stackexchange.com/questions/59418/interpolation-of-influenza-data-that-conserves-weekly-mean
+alt: https://stats.stackexchange.com/questions/209360/interpolating-binned-data-such-that-bin-average-is-preserved
+https://stackoverflow.com/questions/51424183/fitting-a-spline-function-in-r-to-interpolate-daily-values-from-monthly-values
 ```{r}
 interpol.consmean <- function(y, period=7, max.iter=100, tol=1e-4, plot=FALSE) {
 
@@ -390,3 +513,8 @@ structure(list(daily.ts = structure(c(9131, 9132, 9133, 9134,
 -365L), class = "data.frame")
 ```
 
+## TODO
+
+1. mean preserving interpolation
+2. tmin and tmax interpolations
+3. max GDDs
