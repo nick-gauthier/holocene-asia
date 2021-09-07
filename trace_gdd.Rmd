@@ -19,6 +19,59 @@ countries <- rnaturalearth::ne_countries(returnclass = "sf", scale = 'large') %>
   st_crop(bbox)
 ```
 
+# Modern GDD
+
+```{r}
+gdd_mod <- read_stars('~/Downloads/CHELSA_gdd10_1981-2010_V.2.1.tif') %>%
+  st_crop(bbox) %>%
+  st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
+  setNames('GDD10') %>%
+  mutate(GDD10 = units::set_units(replace_na(GDD10, 0), 'degree_C'))
+
+ggplot() + geom_stars(data = units::drop_units(gdd_mod) > 2900)
+```
+```{r}
+gdd_mod %>% pull(GDD10) %>% hist
+```
+
+
+```{r}
+gts <- list.files('/Volumes/Data/CHELSA/CHELSA_V1_GDD_TS', pattern = 'gts', full.names = TRUE)  %>%
+  map(~read_stars(., NA_value = -99999) %>%
+  st_crop(countries) %>%
+    st_as_stars() %>% # need to convert to stars before warping so na values are correct
+    st_warp(dest = ref, use_gdal = TRUE, method = 'average')) %>%
+  do.call('c', .) %>%
+  merge(name = 'time') %>%
+  st_set_dimensions('time', values = 1979:2013) %>%
+  setNames('gts0') %>%
+  dplyr::mutate(gts0 = units::set_units(gts0, 'C')) %>%
+  mutate(gts0 = replace_na(gts0, 0))
+```
+
+```{r}
+ggplot() +
+  geom_stars(data = gts[,,,1:4]) +
+  facet_wrap(~time) +
+  scale_fill_viridis_c(option = 'magma', na.value = NA) +
+  geom_sf(data = bounds_fine, fill = NA) +
+  theme_bw()
+```
+
+
+```{r}
+gts <- list.files('/Volumes/Data', pattern = 'gts', full.names = TRUE) %>%
+  read_stars(along = list('time' = 1979:2013), 
+             RasterIO = list(nXOff = 28201, nXSize = 11400, 
+                             nYOff = 2880, nYSize = 8520, 
+                             nBufXSize = 1140, nBufYSize = 852, resample = 'average'), proxy = FALSE) %>%
+  setNames('gts0') %>%
+  dplyr::mutate(gts0 = units::set_units(gts0, 'C')) %>%
+  st_crop(countries_fine)
+
+gts %>% plot
+```
+
 ```{r}
 trace <- list.files('~/Downloads/drive-download-20210831T213234Z-001', full.names = TRUE) %>%
   map(~read_ncdf(., var = 'TREFHT', eps = 0.01) %>% st_crop(bbox)) %>%
@@ -26,6 +79,8 @@ trace <- list.files('~/Downloads/drive-download-20210831T213234Z-001', full.name
   mutate(TREFHT = units::set_units(TREFHT, 'degree_C')) %>%
   st_set_dimensions( names = c('x', 'y', 'time'))
 ```
+
+
 # GDD calculation
 
 ```{r}
@@ -60,7 +115,8 @@ gdd_monthly <- function(rast, base = 10, parallel = FALSE) {
 
 ```{r}
 plan(multisession)
-trace_gdd <- gdd_monthly(trace, parallel = TRUE)%>% st_set_dimensions('time', values = seq(-8.5, 0.039, 0.001))
+trace_gdd <- gdd_monthly(trace, parallel = TRUE) %>% 
+  st_set_dimensions('time', values = seq(-8.5, 0.039, 0.001))
 plan(sequential)
 ```
 
