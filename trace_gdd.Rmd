@@ -30,6 +30,13 @@ gdd_mod <- read_stars('/Volumes/Data/CHELSA_gdd10_1981-2010_V.2.1.tif') %>%
   setNames('GDD10') %>%
   mutate(GDD10 = units::set_units(replace_na(GDD10 / 10, 0), 'degree_C'))
 
+```
+
+
+
+
+```{r}
+
 ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 2900) + geom_sf(data = chengdu)
 ggplot() + geom_stars(data = units::drop_units(test %>% st_crop(countries)) > 2900) + geom_sf(data = chengdu)
 ggplot() + geom_stars(data = units::drop_units(test_lin %>% st_crop(countries)) > 2900)
@@ -130,11 +137,10 @@ gdd_monthly <- function(rast, base = 10, parallel = FALSE) {
       
       spline(month_days, temps, xout = 1:ndays) %>%
         as_tibble() %>%
-        mutate(year = (x - 1) %/% 365) %>%
+        mutate(year = (x - 1) %/% 365,
+               y = if_else(y < base, base, y)) %>%
         group_by(year) %>%
-        summarise(gdd = reduce(y,~ { new <- .y - base 
-                              if(new < 0) .x else .x + new },
-                               .init = 0)) %>%
+        summarise(gdd = sum(y - base)) %>%
         pull(gdd)
     }, FUTURE = parallel, .fname = 'time'
   ) %>%
@@ -158,6 +164,7 @@ ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, mean)) + scale_fill_virid
 ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, sd)) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts)
 #ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, sd) / st_apply(trace_gdd, 1:2, mean)) + scale_fill_viridis_c(option = 'magma', trans = 'log') + geom_sf(data = coasts)
 ```
+
 ```{r}
 ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, function(x) sum(x > 2900) / length(x))) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts) + theme_void()
 ```
@@ -221,12 +228,9 @@ gdd_clim <- function(rast, base = 10, parallel = FALSE) {
       
       month_days <- c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349)
       
-      spline(month_days, temps, xout = 1:365) %>%
-        as_tibble() %>%
-        summarise(gdd = reduce(y,~ { new <- .y - base 
-                              if(new < 0) .x else .x + new },
-                               .init = 0)) %>%
-        pull(gdd)
+      temp_daily <- spline(month_days, temps, xout = 1:365)$y 
+      temp_daily[temp_daily < base] <- base
+      return(sum(temp_daily - base))
     }, FUTURE = parallel, .fname = 'time'
   ) %>%
     setNames('GDD') %>%
@@ -234,6 +238,7 @@ gdd_clim <- function(rast, base = 10, parallel = FALSE) {
     setNames(paste0('GDD', base))
 }
 
+  
 gdd_clim_step <- function(rast, base = 10, parallel = FALSE) {
   daily <- st_apply(rast, c('x', 'y'),
     FUN = function(temps) {
@@ -369,9 +374,7 @@ ggplot(data = testdat, aes(doy, temp))+
     geom_point()
 
 ```
-```{r}
-ggplot() + geom_stars(data = trace[,,,1:12]) + facet_wrap(~time) + scale_fill_viridis_c(option = 'magma')
-```
+
 
 
 source: https://stats.stackexchange.com/questions/59418/interpolation-of-influenza-data-that-conserves-weekly-mean
