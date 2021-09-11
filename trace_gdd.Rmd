@@ -13,6 +13,7 @@ bbox <- st_bbox(c(xmin = 60, xmax = 150, ymin = -11, ymax = 55), crs = 4326)
 ref <- st_as_stars(bbox, dx = 0.1)
 library(future)
 library(tidyEOF)
+library(mgcv)
 coasts <- rnaturalearth::ne_coastline(returnclass = 'sf') %>%
   st_crop(bbox)
 countries <- rnaturalearth::ne_countries(returnclass = "sf", scale = 'large') %>%
@@ -333,47 +334,79 @@ niche_fine <- chelsa_full_gdd %>% split() %>% transmute(niche = case_when(GDD10 
 ggplot() + geom_stars(data = niche_fine) + scale_fill_viridis_d(option = 'magma')+ geom_sf(data = coasts) + theme_void()
 ```
 
-## Exploring ways of pseudo-daily interpolation from monthly averages
+## Exploring ways of pseudo-daily interpolation from monthly averages.
 ```{r}
-library(mgcv)
-
-testdat <- st_extract(temp, chengdu) %>%
+testmon <- st_extract(temp, chengdu) %>%
   as_tibble %>%
   select(-geometry) %>%
-  mutate(temp = units::drop_units(temp),
-         doy = (0.5:11.5) * 365/12)
-```
+  rename(month = time) %>%
+  mutate(doy = (0.5:11.5) * 365/12,
+         temp = units::drop_units(temp))
+
+testmon <- temp[,10,10,] %>%
+  as_tibble %>%
+ # select(-geometry) %>%
+  rename(month = time) %>%
+  mutate(doy = (0.5:11.5) * 365/12,
+         temp = units::drop_units(temp))
 
 
-```{r}
-testgam <- mgcv::gam(temp ~ s(doy, bs = 'cc', k = 12), knots = list(doy = c(1, 366)), data = testdat)
-
-gam_line <- tibble(doy = 1:365) %>%
-  mutate(temp = predict(testgam, .))
-
-gam_line %>%
-  mutate(month = lubridate::month(as.Date(paste(1, 1:365), '%Y %j'))
-) %>%
-  group_by(month) %>%
-  summarise(test = mean(temp)) %>%
-  left_join(testdat %>% mutate(month = 1:12)) %>%
-  mutate(resid = temp - test)
+testmod <- mgcv::gam(temp ~ s(doy, bs = 'cc', k = 12), 
+                     knots = list(doy = c(1, 366)), 
+                     data = testmon)
   
+testdaily <- tibble(doy = 1:365,
+                   month = lubridate::month(as.Date(paste(1, 1:365), '%Y %j'))) %>%
+  mutate(temp = predict(testmod, .))
+```
+
+so the algorithm is calculate gam on monthly data, predict on daily, save the outputs, aggregate to mean, calculate residuals, calculate gam, predict daily, add to outputs
+```{r}
+mon_avg <- testmon$temp
+daily_temp <- rep(0, 365)
+for(i in 1:1000) {
+  new_daily <- mon_avg %>%
+    monthly_to_daily
+  
+  daily_temp <- daily_temp + new_daily
+  
+  new_monthly <- new_daily %>%
+    daily_to_monthly()
+  
+  mon_avg <- mon_avg - new_monthly
+  
+  if(mean(mon_avg) < 0.0001) break
+}
+
+#input is daily?
+daily_to_monthly <- function(x) {
+  tibble(doy = 1:365,
+       month = lubridate::month(as.Date(paste(1, 1:365), '%Y %j')),
+       val = x) %>%
+  group_by(month) %>%
+  summarise(new_avg = mean(val)) %>%
+  pull(new_avg)
+}
+
+monthly_to_daily <- function(x) {
+  doy <- (0.5:11.5) * 365/12
+  gam(x ~ s(doy, bs = 'cc', k = 12), knots = list(doy = c(1, 366))) %>%
+    predict.gam(data.frame(doy = 1:365))
+}
 
 ```
 
 ```{r}
-ggplot(data = testdat, aes(doy, temp))+
+ggplot(data = testmon, aes(doy, temp))+
   #geom_line() +
-  geom_line(data = gam_line, color = 'red') +
-  geom_line(data = as_tibble(spline(testdat$doy, testdat$temp, xout = 1:365, method = 'periodic')), aes(x = x, y = y), color = 'green') +
-    geom_line(data = as_tibble(spline(testdat$doy, testdat$temp, xout = 1:365, method = 'fmm')), aes(x = x, y = y), color = 'blue') +
-    geom_line(data = as_tibble(spline(testdat$doy, testdat$temp, xout = 1:365, method = 'natural')), aes(x = x, y = y), color = 'orange') +
-  geom_line(data = as_tibble(approx(testdat$doy, testdat$temp, xout = 1:365, method = 'constant', f = .5, rule = 2)), aes(x = x, y = y), color = 'orange') +
-   geom_line(data = as_tibble(approx(testdat$doy, testdat$temp, xout = 1:365, method = 'linear', rule = 2)), aes(x = x, y = y), color = 'black') +
-    geom_point()
+  geom_line(data = testdaily, color = 'red') +
+    geom_point() +
+    geom_line(data = mutate(testdaily, temp = daily_temp), color = 'blue')
 
+
+sum(testmon$temp - daily_to_monthly(daily_temp))
 ```
+
 
 
 
