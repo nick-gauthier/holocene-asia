@@ -30,9 +30,43 @@ gdd_mod <- read_stars('/Volumes/Data/CHELSA_gdd10_1981-2010_V.2.1.tif') %>%
   st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
   setNames('GDD10') %>%
   mutate(GDD10 = units::set_units(replace_na(GDD10 / 10, 0), 'degree_C'))
-
 ```
 
+```{r}
+ggplot() + 
+  geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 2900) +
+  scale_fill_brewer(na.value = NA) + 
+  ggtitle('Tropical Japonica', '120 day') +
+  geom_sf(data = coasts) +
+  theme_minimal()
+ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 3300) +
+  scale_fill_brewer(na.value = NA) +
+  ggtitle('Tropical Japonica', '130 day') +
+  geom_sf(data = coasts) +
+  theme_minimal()
+ggplot() + 
+  geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 2500) +
+  scale_fill_brewer(na.value = NA) + 
+  ggtitle('Temperate Japonica', '130 day') +
+  geom_sf(data = coasts) +
+  theme_minimal()
+ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 3000) +
+  scale_fill_brewer(na.value = NA) +
+  ggtitle('Temperate Japonica', '150 day') +
+  geom_sf(data = coasts) +
+  theme_minimal()
+ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 2400) +
+  scale_fill_brewer(na.value = NA) +
+  ggtitle('Indica', '110 day') +
+  geom_sf(data = coasts) +
+  theme_minimal()
+
+ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 3000) +
+  scale_fill_brewer(na.value = NA) +
+  ggtitle('Indica', '120 day') +
+  geom_sf(data = coasts) +
+  theme_minimal()
+```
 
 
 
@@ -54,6 +88,7 @@ ggplot() + geom_stars(data =test3) + scale_fill_distiller(palette = 'RdBu', na.v
 
 ggplot() + geom_stars(data=st_apply(chelsa_trace_gdd[[1]], 1:2, mean) - st_apply(temp, 1:2, mean))+ scale_fill_distiller(palette = 'RdBu', na.value = NA,name = 'Bias',limits = c(-14, 14)) + theme_void() + geom_sf(data = coasts) + ggtitle('Chelsa_trace (last 100 years) - CHELSA')
 ```
+
 ```{r}
 ggplot() + geom_stars(data = gdd_mod %>% st_crop(filter(countries, admin == 'China'))) +scale_fill_viridis_c(option = 'magma')
 ```
@@ -116,6 +151,7 @@ trace <- list.files('/Volumes/Data/TraCE-TREFHT', full.names = TRUE)[13] %>%
   mutate(TREFHT = units::set_units(TREFHT, 'degree_C')) %>%
   st_set_dimensions( names = c('x', 'y', 'time'))
 ```
+
 ```{r}
 
 ```
