@@ -20,6 +20,22 @@ countries <- rnaturalearth::ne_countries(returnclass = "sf", scale = 'large') %>
   st_crop(bbox)
 chengdu <- st_point(c(104.284, 30.665)) %>%
   st_sfc(crs = 4326)
+
+gdd_clim <- function(rast, base = 10, parallel = FALSE) {
+  daily <- st_apply(rast, c('x', 'y'),
+    FUN = function(temps) {
+      
+      month_days <- c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349)
+      
+      temp_daily <- spline(month_days, temps, xout = 1:365)$y 
+      temp_daily[temp_daily < base] <- base
+      return(sum(temp_daily - base))
+    }, FUTURE = parallel, .fname = 'time'
+  ) %>%
+    setNames('GDD') %>%
+    mutate(GDD = units::set_units(GDD, 'degree_C')) %>%
+    setNames(paste0('GDD', base))
+}
 ```
 
 # Modern GDD
@@ -152,8 +168,36 @@ trace <- list.files('/Volumes/Data/TraCE-TREFHT', full.names = TRUE)[13] %>%
   st_set_dimensions( names = c('x', 'y', 'time'))
 ```
 
-```{r}
+# CCSM
 
+```{r}
+mh_tmin <- read_stars('/Volumes/Data/PMIP3/MH/tasmin/tasmin_Aclim_CCSM4_midHolocene_r1i1p1_100001-130012-clim.nc', sub = 'tasmin')
+mh_tmax <- read_stars('/Volumes/Data/PMIP3/MH/tasmax/tasmax_Aclim_CCSM4_midHolocene_r1i1p1_100001-130012-clim.nc', sub = 'tasmax')
+
+mh_temp <- ((mh_tmin + mh_tmax) / 2) %>%
+  st_warp(ref, use_gdal = TRUE, method = 'bilinear') %>%
+  st_set_dimensions('band', values = 1:12, names = 'time') %>%
+  setNames('temp') %>%
+  mutate(temp = units::set_units(temp, K) %>% units::set_units(degree_C))
+```
+
+```{r}
+mh_gdd <- gdd_clim(mh_temp)
+```
+
+```{r}
+ggplot() + 
+  geom_stars(data = mh_gdd) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_c(option = 'magma') +
+  theme_void()
+```
+```{r}
+ggplot() + 
+  geom_stars(data = units::drop_units(mh_gdd) > 2900) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
+  theme_void()
 ```
 
 
@@ -196,6 +240,7 @@ plan(sequential)
 ```
 
 
+
 ```{r}
 ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, mean)) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts)
 ggplot() + geom_stars( data = st_apply(trace_gdd, 1:2, sd)) + scale_fill_viridis_c(option = 'magma')+ geom_sf(data = coasts)
@@ -222,6 +267,7 @@ Focus on the last 5,000 years
 gdd_pat_5k <- get_patterns(trace_gdd[,,,3540:8000], k = 4)
 plot_eofs(gdd_pat_5k, scaled = TRUE, rawdata = trace_gdd[,,,3540:8000]) + geom_sf(data = coasts); plot_amps(gdd_pat_5k, scaled = FALSE)
 ```
+
 ```{r}
 plan(multisession)
 trace_gdd5 <- gdd_monthly(trace, base = 5, parallel = TRUE)%>% st_set_dimensions('time', values = seq(-8.5, 0.039, 0.001))
@@ -259,21 +305,7 @@ temp <- ((tasmin + tasmax) / 2) %>% # average and reduce 10 multiplier
 
 ```{r}
 plan(multisession)
-gdd_clim <- function(rast, base = 10, parallel = FALSE) {
-  daily <- st_apply(rast, c('x', 'y'),
-    FUN = function(temps) {
-      
-      month_days <- c(15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349)
-      
-      temp_daily <- spline(month_days, temps, xout = 1:365)$y 
-      temp_daily[temp_daily < base] <- base
-      return(sum(temp_daily - base))
-    }, FUTURE = parallel, .fname = 'time'
-  ) %>%
-    setNames('GDD') %>%
-    mutate(GDD = units::set_units(GDD, 'degree_C')) %>%
-    setNames(paste0('GDD', base))
-}
+
 
   
 gdd_clim_step <- function(rast, base = 10, parallel = FALSE) {
