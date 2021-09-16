@@ -162,6 +162,46 @@ ggplot() +
   scale_fill_viridis_d(option = 'magma') +
   theme_void()
 ```
+## Beyer et al HadCM3
+
+```{r}
+beyer <- read_ncdf('~/Desktop/LateQuaternary_Environment.nc', var = 'temperature', make_time = FALSE) %>%
+  st_crop(ref)
+beyer <- read_stars('~/Desktop/LateQuaternary_Environment.nc', sub = 'temperature', make_time = FALSE) %>%
+  st_set_crs(4326) %>%
+  st_crop(ref)
+
+beyer_delta <- st_as_stars(slice(beyer, 'time', 72)) - st_as_stars(slice(beyer, 'time', 66))
+ggplot() + geom_stars(data = beyer_delta) + facet_wrap(~month) + scale_fill_distiller(palette = 'RdBu', na.value = NA, limits = c(-15, 15))
+
+beyer_gdd_mh <- st_as_stars(slice(beyer, 'time', 66)) %>% gdd_clim
+beyer_gdd_pi <- st_as_stars(slice(beyer, 'time', 72)) %>% gdd_clim
+
+ggplot() + 
+  geom_stars(data = beyer_gdd_pi - beyer_gdd_mh) +
+  geom_sf(data = coasts) +
+  scale_fill_distiller(palette = 'RdBu', limits = c(-1030, 1030), na.value = NA) +
+  ggtitle('GDD10 in HadCM3', 'Change from Mid Holocene to Present') +
+  theme_void()
+```
+```{r}
+ggplot() + 
+  geom_stars(data = units::drop_units(beyer_gdd_mh) > 2900) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
+  theme_void()
+ggplot() + 
+  geom_stars(data = units::drop_units(beyer_gdd_pi) > 2900) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
+  theme_void()
+ggplot() + 
+  geom_stars(data = (units::drop_units(beyer_gdd_pi) > 2900) == (units::drop_units(beyer_gdd_mh) > 2900)) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
+  theme_void()
+```
+
 ## worldclim
 ```{r}
 worldclim_tmin <- list.files('~/Downloads/ccmidtn_10m', full.names = TRUE)[c(1,5:12,2:4)] %>%
@@ -177,35 +217,41 @@ read_stars(along = 'time') %>%
   `/`(10)
 
 worldclim_gdd <- ((worldclim_tmax + worldclim_tmin) / 2) %>% setNames('temp') %>% gdd_clim()
-
-plot(worldclim_gdd)
-plot(units::drop_units(worldclim_gdd) > 2900)
 ```
 
 
 ```{r}
 worldclim_temp <- list.files('~/Downloads/wc2', full.names = TRUE) %>%
 read_stars(along = 'time') %>%
-  #st_set_crs(4326) %>%
-  st_crop(ref)# %>% 
- # `/`(10)
-plot(worldclim_temp)
+  st_crop(ref)
+
 worldclim_gdd2 <-  gdd_clim(worldclim_temp)
-
-plot(worldclim_gdd2)
-plot(units::drop_units(worldclim_gdd2) > 2900)
-```
-
-```{r}
-plot(worldclim_gdd2 - worldclim_gdd)
-plot((units::drop_units(worldclim_gdd) > 2900) == (units::drop_units(worldclim_gdd2) > 2900))
 ```
 
 ```{r}
 ggplot() + 
-  geom_stars(data = mh_gdd) +
+  geom_stars(data = worldclim_gdd2 - worldclim_gdd) +
   geom_sf(data = coasts) +
-  scale_fill_viridis_c(option = 'magma') +
+  scale_fill_distiller(palette = 'RdBu', limits = c(-1300, 1300), na.value = NA) +
+  ggtitle('GDD10 in Worldclim2', 'Change from Mid Holocene to Present') +
+  theme_void()
+```
+
+```{r}
+ggplot() + 
+  geom_stars(data = units::drop_units(worldclim_gdd2) > 2900) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
+  theme_void()
+ggplot() + 
+  geom_stars(data = units::drop_units(worldclim_gdd) > 2900) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
+  theme_void()
+ggplot() + 
+  geom_stars(data = (units::drop_units(worldclim_gdd2) > 2900) == (units::drop_units(worldclim_gdd) > 2900)) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
   theme_void()
 ```
 ```{r}
