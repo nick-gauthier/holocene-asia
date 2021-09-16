@@ -79,64 +79,6 @@ ggplot() +
 
 
 
-```{r}
-gts <- list.files('/Volumes/Data/CHELSA/CHELSA_V1_GDD_TS', pattern = 'gts', full.names = TRUE)  %>%
-  read_stars(along = 'time') %>%
-  st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
-  st_set_dimensions('band', values = 1979:2013, names = 'time') %>%
-  setNames('gts0') %>%
-  mutate(gts0 = units::set_units(if_else(gts0 > 0, gts0, 0), 'C')) ## NA values are not correctly read so fix here (NA_value in read_stars doesn't work when used with proxy and st_warp)
-plot(gts)
-```
-
-```{r}
-ggplot() +
-  geom_stars(data = gts[,,,1:4]) +
-  facet_wrap(~time) +
-  scale_fill_viridis_c(option = 'magma', na.value = NA) +
-  geom_sf(data = bounds_fine, fill = NA) +
-  theme_bw()
-```
-
-```{r}
-tasmax <- list.files('/Volumes/Data/CHELSA/CHELSA_V2/climatology', pattern = 'tasmax', full.names = TRUE) %>%
-  read_stars(along = 'time') 
-tasmax[,,,1] %>% st_warp(dest = ref, use_gdal = TRUE, method = 'average') 
-tasmin <- list.files('/Volumes/Data/CHELSA/CHELSA_V2/climatology/', pattern = 'tasmin', full.names = TRUE) %>%
-  read_stars(along = 'time')
-
-temp <- ((tasmin + tasmax) / 2) %>% # average and reduce 10 multiplier
-  st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
-  st_set_dimensions('band', values = 1:12, names = 'time') %>%
-  setNames('temp') %>%
-  mutate(temp = units::set_units(temp/10, 'kelvin') %>% units::set_units('degree_C'))
-
-plot(temp)
-
-plot(test)
-```
-
-```{r}
-gts <- list.files('/Volumes/Data/CHELSA/CHELSA_V1_GDD_TS', pattern = 'gts', full.names = TRUE) %>%
-  read_stars(along = list('time' = 1979:2013), 
-             RasterIO = list(nXOff = 28201, nXSize = 11400, 
-                             nYOff = 2880, nYSize = 8520, 
-                             nBufXSize = 1140, nBufYSize = 852, resample = 'average'), proxy = FALSE) %>%
-  setNames('gts0') %>%
-  dplyr::mutate(gts0 = units::set_units(gts0, 'C')) #%>%
-  #st_crop(countries_fine)
-
-gts %>% plot
-```
-
-```{r}
-trace <- list.files('/Volumes/Data/TraCE-TREFHT', full.names = TRUE)[13] %>%
-  map(~read_ncdf(., var = 'TREFHT', eps = 0.01) %>% st_crop(bbox)) %>%
-  do.call(c, .) %>%
-  mutate(TREFHT = units::set_units(TREFHT, 'degree_C')) %>%
-  st_set_dimensions( names = c('x', 'y', 'time'))
-```
-
 # CCSM
 
 ```{r}
@@ -147,11 +89,99 @@ mh_temp <- ((mh_tmin + mh_tmax) / 2) %>%
   st_warp(ref, use_gdal = TRUE, method = 'bilinear') %>%
   st_set_dimensions('band', values = 1:12, names = 'time') %>%
   setNames('temp') %>%
-  mutate(temp = units::set_units(temp, K) %>% units::set_units(degree_C))
+  mutate(temp = units::set_units(temp, K) %>% units::set_units(degree_C)) %>%
+  st_crop(countries)
+
+pi_tmax <- read_stars('~/Downloads/tasmax_Aclim_CCSM4_piControl_r1i1p1_030101-130012-clim.nc', sub = 'tasmax') 
+pi_tmin <- read_stars('~/Downloads/tasmin_Aclim_CCSM4_piControl_r1i1p1_030101-130012-clim.nc', sub = 'tasmin')
+
+pi_temp <- ((pi_tmin + pi_tmax) / 2) %>%
+  st_warp(ref, use_gdal = TRUE, method = 'bilinear') %>%
+  st_set_dimensions('band', values = 1:12, names = 'time') %>%
+  setNames('temp') %>%
+  mutate(temp = units::set_units(temp, K) %>% units::set_units(degree_C)) %>%
+  st_crop(countries)
+```
+
+```{r}
+ggplot() + 
+  geom_stars(data =  pi_temp - mh_temp) +
+  geom_sf(data = coasts) +
+  scale_fill_distiller(palette = 'RdBu', limits = c(-4, 4), na.value = NA) +
+  facet_wrap(~time) +
+  theme_void()
 ```
 
 ```{r}
 mh_gdd <- gdd_clim(mh_temp)
+pi_gdd <- gdd_clim(pi_temp)
+```
+
+```{r}
+ggplot() + 
+  geom_stars(data = hist_gdd - mh_gdd) +
+  geom_sf(data = coasts) +
+  scale_fill_distiller(palette = 'RdBu', limits = c(-960, 960), na.value = NA) +
+  ggtitle('GDD10 in CCSM4', 'Change from Mid Holocene to Present') +
+  theme_void()
+```
+
+
+
+```{r}
+ggplot() + 
+  geom_stars(data = units::drop_units(mh_gdd) > 3000) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
+  theme_void()
+ggplot() + 
+  geom_stars(data = units::drop_units(pi_gdd) > 3000) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
+  theme_void()
+ggplot() + 
+  geom_stars(data = (units::drop_units(pi_gdd) > 3000) == (units::drop_units(mh_gdd) > 3000)) +
+  geom_sf(data = coasts) +
+  scale_fill_viridis_d(option = 'magma') +
+  theme_void()
+```
+## worldclim
+```{r}
+worldclim_tmin <- list.files('~/Downloads/ccmidtn_10m', full.names = TRUE)[c(1,5:12,2:4)] %>%
+read_stars(along = 'time') %>%
+  st_set_crs(4326) %>%
+  st_crop(ref) %>% 
+  `/`(10)
+
+worldclim_tmax <- list.files('~/Downloads/ccmidtx_10m', full.names = TRUE)[c(1,5:12,2:4)] %>%
+read_stars(along = 'time') %>%
+  st_set_crs(4326) %>%
+  st_crop(ref) %>% 
+  `/`(10)
+
+worldclim_gdd <- ((worldclim_tmax + worldclim_tmin) / 2) %>% setNames('temp') %>% gdd_clim()
+
+plot(worldclim_gdd)
+plot(units::drop_units(worldclim_gdd) > 2900)
+```
+
+
+```{r}
+worldclim_temp <- list.files('~/Downloads/wc2', full.names = TRUE) %>%
+read_stars(along = 'time') %>%
+  #st_set_crs(4326) %>%
+  st_crop(ref)# %>% 
+ # `/`(10)
+plot(worldclim_temp)
+worldclim_gdd2 <-  gdd_clim(worldclim_temp)
+
+plot(worldclim_gdd2)
+plot(units::drop_units(worldclim_gdd2) > 2900)
+```
+
+```{r}
+plot(worldclim_gdd2 - worldclim_gdd)
+plot((units::drop_units(worldclim_gdd) > 2900) == (units::drop_units(worldclim_gdd2) > 2900))
 ```
 
 ```{r}
