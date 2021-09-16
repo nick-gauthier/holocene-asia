@@ -76,6 +76,23 @@ ggplot() +
   geom_sf(data = coasts) +
   theme_void()
 ```
+## Time Series
+
+```{r}
+order <- list.files('/Volumes/Data/CHELSA/CHELSA_V2_TAS_daily') %>% str_split('_') %>% map(~.[c(4,3)]) %>% str_c %>% str_order()
+
+plan(multisession)
+daily_gdd <- list.files('/Volumes/Data/CHELSA/CHELSA_V2_TAS_daily', full.names = TRUE)[order] %>%
+read_stars(along = 'time') %>% st_crop(ref) %>%
+  setNames('temp') %>%
+  transmute(temp = if_else(temp > 10, temp, 10) - 10) %>%
+  st_apply(1:2, sum, FUTURE = TRUE)
+
+
+plan(sequential)
+
+daily_gdd
+```
 
 
 
