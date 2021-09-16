@@ -14,7 +14,7 @@ ref <- st_as_stars(bbox, dx = 0.1)
 library(future)
 library(tidyEOF)
 library(mgcv)
-coasts <- rnaturalearth::ne_coastline(returnclass = 'sf') %>%
+coasts <- rnaturalearth::ne_coastline(returnclass = 'sf', scale = 'medium') %>%
   st_crop(bbox)
 countries <- rnaturalearth::ne_countries(returnclass = "sf", scale = 'large') %>%
   st_crop(bbox)
@@ -40,74 +40,43 @@ gdd_clim <- function(rast, base = 10, parallel = FALSE) {
 
 # Modern GDD
 
+Load the ERA-5 based CHELSA V2.1.
 ```{r}
 gdd_mod <- read_stars('/Volumes/Data/CHELSA_gdd10_1981-2010_V.2.1.tif') %>%
   st_crop(bbox) %>%
   st_warp(dest = ref, use_gdal = TRUE, method = 'average') %>%
   setNames('GDD10') %>%
-  mutate(GDD10 = units::set_units(replace_na(GDD10 / 10, 0), 'degree_C'))
+  mutate(GDD10 = replace_na(GDD10 / 10, 0),
+         niche = case_when(GDD10 > 3300 ~ 'Tropical Japonica (130 day)',
+                              GDD10 > 3000 ~ 'Temperate Japonica (150 day) and Indica (120 day)',
+                              GDD10 > 2900 ~ 'Tropical Japonica (120 day)',
+                              GDD10 > 2500 ~ 'Temperate Japonica (130 day)',
+                              GDD10 > 2400 ~ 'Indica (110 day)',
+                              !is.na(GDD10) ~ 'None') %>%
+              factor(levels = c('None', 'Indica (110 day)', 
+                                'Temperate Japonica (130 day)', 
+                                'Tropical Japonica (120 day)', 
+                                'Indica (120 day) or Temperate Japonica (150 day)', 
+                                'Tropical Japonica (130 day)'))) %>%
+    st_crop(countries)
 ```
 
 ```{r}
+ggplot() +
+  geom_stars(data = gdd_mod) +
+  scale_fill_viridis_c(option = 'magma', na.value = NA) +
+  geom_sf(data = coasts) +
+  theme_minimal()
+```
+
+```{r fig.width=10, fig.height=8}
 ggplot() + 
-  geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 2900) +
-  scale_fill_brewer(na.value = NA) + 
-  ggtitle('Tropical Japonica', '120 day') +
+  geom_stars(data = modern_niche) +
+  scale_fill_brewer(palette = 'Spectral', direction = -1) +
   geom_sf(data = coasts) +
-  theme_minimal()
-ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 3300) +
-  scale_fill_brewer(na.value = NA) +
-  ggtitle('Tropical Japonica', '130 day') +
-  geom_sf(data = coasts) +
-  theme_minimal()
-ggplot() + 
-  geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 2500) +
-  scale_fill_brewer(na.value = NA) + 
-  ggtitle('Temperate Japonica', '130 day') +
-  geom_sf(data = coasts) +
-  theme_minimal()
-ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 3000) +
-  scale_fill_brewer(na.value = NA) +
-  ggtitle('Temperate Japonica', '150 day') +
-  geom_sf(data = coasts) +
-  theme_minimal()
-ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 2400) +
-  scale_fill_brewer(na.value = NA) +
-  ggtitle('Indica', '110 day') +
-  geom_sf(data = coasts) +
-  theme_minimal()
-
-ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 3000) +
-  scale_fill_brewer(na.value = NA) +
-  ggtitle('Indica', '120 day') +
-  geom_sf(data = coasts) +
-  theme_minimal()
+  theme_void()
 ```
 
-
-
-```{r}
-
-ggplot() + geom_stars(data = units::drop_units(gdd_mod %>% st_crop(countries)) > 2900) + geom_sf(data = chengdu)
-ggplot() + geom_stars(data = units::drop_units(test %>% st_crop(countries)) > 2900) + geom_sf(data = chengdu)
-ggplot() + geom_stars(data = units::drop_units(test_lin %>% st_crop(countries)) > 2900)
-plot(gdd_mod);plot(read_stars('/Volumes/Data/CHELSA_gdd10_1981-2010_V.2.1.tif') %>%
-  st_crop(bbox))
-
-ggplot() + geom_stars(data = st_apply(temp, 1:2, mean) %>% st_warp(slice(trace, 'time', 1), use_gdal = TRUE, method = 'average')) + scale_fill_viridis_c(option = 'magma')
-ggplot() + geom_stars(data = trace %>% st_apply(1:2, mean)) + scale_fill_viridis_c(option = 'magma')
-
-
-test3 <- st_apply(trace[,,,4920:5280], 1:2, mean) - (st_apply(temp, 1:2, mean) %>% st_warp(slice(trace, 'time', 1), use_gdal = TRUE, method = 'average'))
-
-ggplot() + geom_stars(data =test3) + scale_fill_distiller(palette = 'RdBu', na.value = NA, limits = c(-14, 14), name = 'Bias') + theme_void() + geom_sf(data = coasts) + ggtitle('Trace (last 30 years) - CHELSA')
-
-ggplot() + geom_stars(data=st_apply(chelsa_trace_gdd[[1]], 1:2, mean) - st_apply(temp, 1:2, mean))+ scale_fill_distiller(palette = 'RdBu', na.value = NA,name = 'Bias',limits = c(-14, 14)) + theme_void() + geom_sf(data = coasts) + ggtitle('Chelsa_trace (last 100 years) - CHELSA')
-```
-
-```{r}
-ggplot() + geom_stars(data = gdd_mod %>% st_crop(filter(countries, admin == 'China'))) +scale_fill_viridis_c(option = 'magma')
-```
 
 
 ```{r}
