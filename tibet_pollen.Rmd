@@ -3,10 +3,14 @@ title: "Tibet Pollen"
 output: html_notebook
 ---
 
-```{r}
+```{r setup}
 library(tidyverse)
 library(readxl)
 library(sf)
+library(scico)
+library(stars)
+
+china <- rnaturalearth::ne_countries(country = 'China', returnclass = 'sf')
 ```
 
 ```{r}
@@ -70,4 +74,222 @@ modern
 ```
 
 
+```{r}
+pollen <- read_excel('china pollen data/China modern pollen - data.xlsx', sheet = 2, skip = 1) %>%
+  slice(-(1:2)) %>%
+  select(-(`No.`:`Elevation (m)`)) %>%
+  mutate(across(everything(), as.numeric))
+```
+
+```{r}
+pollen_fossil <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
+  slice(-(1:2)) %>%
+  column_to_rownames("Site/Taxa") %>%
+  select(-(Long:Age)) %>%
+  mutate(across(everything(), as.numeric))
+```
+
+Check that all rows sum to 100%
+```{r}
+all.equal(sum(rowSums(pollen)) / 100,nrow(pollen))
+rowSums(pollen_fossil) %>% hist
+```
+
+
+```{r}
+pca <- prcomp(pollen, scale. = FALSE)
+pca_s <- prcomp(pollen, scale. = TRUE)
+```
+
+```{r}
+screeplot(pca, type = 'lines', npcs = 20)
+screeplot(pca_s, type = 'lines', npcs = 20)
+```
+
+```{r}
+pca$rotation[,1:2] %>% plot
+pca_s$rotation[,1:2] %>% plot
+```
+
+so what's up with these taxa that are pca1 scaled?
+```{r}
+pca$rotation[,1:2] %>% as.data.frame %>% filter(PC1 > .2 | PC1 < -.2)
+```
+
+Betula is birch, fraxinus is ash, this is all arborieal, day lily (rare)
+```{r}
+pca_s$rotation[,1:2] %>% as.data.frame %>% filter(PC1 > .2)
+```
+
+sedges are extreme on pc2 unscaled, grow along bodies of water, major grassland biomes
+```{r}
+pca$rotation[,1:2] %>% as.data.frame %>% filter(PC2 > .2)
+```
+```{r}
+pca_s$rotation[,1:2] %>% as.data.frame %>% filter(PC2 < -.2)
+```
+# Climate relationships
+
+So let's build a model predict MAT and TAP from the leading 2 PCs (arborial-nonarboreal and sedges)
+
+```{r}
+pc_scores <- pca$x %>% 
+  as_tibble() %>%
+  bind_cols(modern, .) %>%
+  select(PC1, PC2) %>%
+  st_set_crs(4326)
+```
+
+
+```{r}
+ggplot() +
+    geom_sf(data= china) +
+  geom_sf(data = pc_scores, aes(color = PC1)) + 
+  scale_color_scico(palette = 'bamako', limits = c(-70, 70), direction = -1) +
+  theme_bw() +
+  ggtitle('Modern Arboreal/Non-Arboreal Pollen concentration')
+```
+```{r}
+ggplot() +
+    geom_sf(data= china) +
+  geom_sf(data = pc_scores, aes(color = PC2)) + 
+  scale_color_scico(palette = 'bamako', limits = c(-80, 80), direction = -1) +
+  theme_bw() +
+  ggtitle('Modern Sedge/Non-Sedge Pollen concentration')
+```
+
+```{r}
+clim <- c('/Volumes/Data/CHELSA/CHELSA_bio1_1981-2010_V.2.1.tif',
+  '/Volumes/Data/CHELSA/CHELSA_bio12_1981-2010_V.2.1.tif',
+  '/Volumes/Data/CHELSA/CHELSA_gdd10_1981-2010_V.2.1.tif',
+  '/Volumes/Data/CHELSA/CHELSA_npp_1981-2010_V.2.1.tif',
+  '/Volumes/Data/CHELSA/CHELSA_gdd0_1981-2010_V.2.1.tif') %>%
+  read_stars() %>%
+  st_crop(st_bbox(pc_scores)) %>%
+  setNames(c('MAT', 'TAP', 'GDD10', 'NPP', 'GDD0')) %>%
+  mutate(GDD10 = replace_na(GDD10, 0),
+         GDD0 = replace_na(GDD0, 0))
+```
+
+```{r}
+plot(clim)
+plot(clim['TAP'])
+plot(clim['GDD10'])
+plot(clim['GDD0'])
+plot(clim['NPP'])
+```
+
+
+```{r}
+clim %>%
+  st_as_stars %>%
+  as_tibble %>%
+  ggplot(aes(MAT, GDD10)) +
+  geom_point()
+```
+
+
+```{r}
+pts <- st_extract(st_as_stars(clim), at = pc_scores, )
+```
+
+```{r}
+library(mgcv)
+dat <- pc_scores %>%
+  mutate(mat = pts$MAT,
+         tap = pts$TAP,
+         gdd10 = pts$GDD10,
+         gdd0 = pts$GDD0,
+         npp = pts$NPP,
+         x = st_coordinates(.)[,1],
+         y = st_coordinates(.)[,2])
+```
+
+
+```{r}
+m1 <- gam(mat ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
+m2 <- gam(tap ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
+m3 <- gam(gdd10 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
+m4 <- gam(npp ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
+m5 <- gam(gdd0 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
+
+summary(m1)$r.sq
+summary(m2)$r.sq
+summary(m3)$r.sq
+summary(m4)$r.sq
+summary(m5)$r.sq
+```
+
+```{r}
+plot(m1)
+```
+
+```{r}
+plot(m2)
+```
+
+```{r}
+plot(m3)
+```
+
+```{r}
+plot(m4)
+```
+
+```{r}
+pc_scores %>%
+  ggplot(aes(PC1, PC2)) +
+  geom_point(alpha = .2)
+```
+How about the forward model?
+```{r}
+m5 <- gam(PC1 ~ s(mat, bs = 'cr') + s(npp, bs = 'cr') + s(tap, bs = 'cr') + s(gdd10, bs = 'cr'), data = dat, method = 'REML', select = TRUE)
+
+summary(m5)$r.sq
+```
+```{r}
+plot(m5, scale = 0)
+```
+## Modern Analogue technique
+
+```{r}
+library(analogue)
+```
+
+```{r}
+plot(pts)
+```
+```{r}
+gdd_mat <- mat(pollen / 100, as_tibble(pts)$GDD10, method = "SQchord")
+```
+
+```{r}
+gdd_mat
+```
+
+```{r}
+summary(gdd_mat)
+```
+```{r}
+getK(gdd_mat)
+```
+
+```{r}
+plot(gdd_mat)
+```
+
+```{r}
+gdd_boot <- bootstrap(gdd_mat, n.boot = 25)
+gdd_boot
+#setK(gdd_mat) <- getK(gdd_boot)
+```
+
+```{r}
+plot(pts %>% select(GDD10))
+```
+
+
+```{r}
+names(pollen_fossil) %in% names(pollen)
+```
 
