@@ -19,6 +19,15 @@ modern <- read_excel('~/Downloads/pollen sites modern China - old+new collection
 
 fossil <- read_excel('~/Downloads/pollen sites fossil China - Ni 2014 palaeo3.xlsx') %>%
   st_as_sf(coords = c(8,9))
+
+
+fossil2 <- read_excel('~/Downloads/china-fossil-pollen-from Ni 2014.xlsx') %>%
+  st_as_sf(coords = c(3,4))
+
+fossil1
+fossil2
+fossil3 %>% count(Site)
+fossil4 %>% count(`Site/Taxa`)
 ```
 
 ```{r}
@@ -87,28 +96,65 @@ pollen_fossil <- read_excel('china pollen data/China west fossil pollen - data.x
   column_to_rownames("Site/Taxa") %>%
   select(-(Long:Age)) %>%
   mutate(across(everything(), as.numeric))
+
+# new fossil pollen data has some duplicated sample names with different values
+pollen_fossil_new <- read_excel('~/Downloads/China west fossil pollen - data from sites.xlsx') %>%
+  select(-(Site:Age))
+
+fossil_loc <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
+  slice(-(1:2)) %>%
+  select(`Site/Taxa`:Age) %>%
+  separate(`Site/Taxa`, into = c('site', 'year'), sep = '_', extra = 'merge') %>%
+  # this part required because there are sometimes extra '_'  in the site names
+  separate(year, into = c('year1', 'year2'), sep = '_') %>% # this warning is ok
+  mutate(site = if_else(is.na(year2), site, paste(site, year1, sep = '_'))) %>%
+  select(-year1, -year2)
+
+# fossil_loc and fossil_loc2 are the same except for one or three samples that are missing. both have some unsual spatial locations
+fossil_loc_new <- read_excel('~/Downloads/China west fossil pollen - data from sites.xlsx') %>%
+  select(Site:Age) %>%
+  separate(Site, into = c('site', 'year'), sep = '_', extra = 'merge') %>%
+  # this part required because there are sometimes extra '_'  in the site names
+  separate(year, into = c('year1', 'year2'), sep = '_') %>% # this warning is ok
+  mutate(site = if_else(is.na(year2), site, paste(site, year1, sep = '_'))) %>%
+  select(-year1, -year2)
+
+fossil_loc %>% count(site) 
+fossil_loc_new %>% count(site) 
+
+ggplot(fossil_loc_new)  +
+  geom_sf(data= china)+ geom_point(aes(Long, Lat)) +
+  geom_sf(data = st_set_crs(fossil, 4326), color = 'red') +
+  geom_sf(data = st_set_crs(fossil2, 4326), color = 'green')
+
+
+read_excel('~/Downloads/China west fossil pollen - data from sites.xlsx') %>% filter(Site == 'SG1_0737900')
 ```
+
 
 Check that all rows sum to 100%
 ```{r}
 all.equal(sum(rowSums(pollen)) / 100,nrow(pollen))
 rowSums(pollen_fossil) %>% hist
+rowSums(pollen_fossil_new) %>% near(100, tol = .01) %>% .[. == FALSE]
+
+pollen_fossil_new %>% mutate(sums = rowSums(.)) %>%
+  filter(sums < 99) %>%
+  select(sums)
+
 ```
 
 
 ```{r}
 pca <- prcomp(pollen, scale. = FALSE)
-pca_s <- prcomp(pollen, scale. = TRUE)
 ```
 
 ```{r}
 screeplot(pca, type = 'lines', npcs = 20)
-screeplot(pca_s, type = 'lines', npcs = 20)
 ```
 
 ```{r}
 pca$rotation[,1:2] %>% plot
-pca_s$rotation[,1:2] %>% plot
 ```
 
 so what's up with these taxa that are pca1 scaled?
@@ -168,7 +214,8 @@ clim <- c('/Volumes/Data/CHELSA/CHELSA_bio1_1981-2010_V.2.1.tif',
   st_crop(st_bbox(pc_scores)) %>%
   setNames(c('MAT', 'TAP', 'GDD10', 'NPP', 'GDD0')) %>%
   mutate(GDD10 = replace_na(GDD10, 0),
-         GDD0 = replace_na(GDD0, 0))
+         GDD0 = replace_na(GDD0, 0)) %>%
+  st_as_stars()
 ```
 
 ```{r}
@@ -190,7 +237,7 @@ clim %>%
 
 
 ```{r}
-pts <- st_extract(st_as_stars(clim), at = pc_scores, )
+pts <- st_extract(clim, at = pc_scores) # bilinear = TRUE causes this to fail for some reason
 ```
 
 ```{r}
@@ -259,8 +306,14 @@ library(analogue)
 ```{r}
 plot(pts)
 ```
+
 ```{r}
-gdd_mat <- mat(pollen / 100, as_tibble(pts)$GDD10, method = "SQchord")
+dat <- analogue::join(pollen, pollen_fossil, verbose = TRUE, type = 'inner')
+```
+
+
+```{r}
+gdd_mat <- mat(dat$pollen / 100, as_tibble(pts)$GDD10, method = "SQchord")
 ```
 
 ```{r}
@@ -288,8 +341,113 @@ gdd_boot
 plot(pts %>% select(GDD10))
 ```
 
+```{r}
+pastgdd <- predict(gdd_mat, dat$pollen_fossil / 100)
+pastgdd$predictions$model$predicted %>% colMeans()
+```
 
 ```{r}
-names(pollen_fossil) %in% names(pollen)
+pastgdd
+```
+
+```{r}
+dat$pollen_fossil %>% as_tibble() %>% mutate(test = pastgdd)
+```
+
+```{r}
+
+dat$pollen_fossil
+as_tibble(pts)$GDD10
+```
+
+
+```{r}
+library(rioja)
+rioja::MAT()
+gdd_mat <- rioja::MAT(dat$pollen / 100, as_tibble(pts)$GDD10, )
+performance(gdd_mat)
+```
+
+```{r}
+print(gdd_mat)
+```
+
+```{r}
+screeplot(gdd_mat)
+```
+
+```{r}
+pastgdd <- predict(gdd_mat, dat$pollen_fossil / 100, k = 4)
+
+fossil_loc <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
+  slice(-(1:2)) %>%
+  select(`Site/Taxa`:Age)
+
+recon <- as_tibble(pastgdd$fit, rownames = 'Site/Taxa') %>%
+  left_join(fossil_loc) %>%
+  separate(`Site/Taxa`, into = c('site', 'year'), sep = '_', extra = 'merge') %>%
+  # this part required because there are sometimes extra '_'  in the site names
+  separate(year, into = c('year1', 'year2'), sep = '_') %>% # this warning is ok
+  mutate(site = if_else(is.na(year2), site, paste(site, year1, sep = '_'))) %>%
+  select(-year1, -year2, -MAT) %>%
+  rename(gdd10 = MAT.wm)
+```
+```{r}
+recon %>% count(site)
+```
+```{r}
+plot(fossil)
+```
+
+
+```{r}
+recon
+b <- gam(y~te(v,w,u,k=c(30,5),d=c(2,1),bs=c(tp,cr)))   
+
+test <- bam(gdd10 ~ te(Long, Lat, Age, k = c(50, 20), d = c(2, 1), bs = c('tp', 'cr')), data = recon %>% filter(Long > 60, Age < 12000))
+
+
+hist(residuals.gam(test))
+summary(test)
+gam.check(test)
+hist(recon$Long) ;hist(recon$Lat)
+
+ggplot(recon, aes(Long, Lat)) + geom_point()
+```
+```{r}
+recon;fossil
+```
+
+
+```{r}
+plot(test)
+```
+```{r}
+recon %>% filter(Age < 12000) %>% pull(Age) %>% hist
+```
+
+```{r}
+china_hex <- china %>% st_make_grid(n = 50, square = FALSE) %>% st_as_sf() %>% mutate(Long = st_coordinates(st_centroid(.))[,1],
+                                                           Lat = st_coordinates(st_centroid(.))[,2]) %>%
+    filter(st_intersects(x, china, sparse = FALSE))
+   
+map_dfr(c(0, 2000, 4000, 6000), ~ mutate(china_hex, Age = .)) %>%
+    mutate(pred = predict(test, ., type = 'response')) %>%
+  mutate(pred = if_else(pred < 0, 0, pred)) %>%
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_viridis_c(option = 'magma') +
+    facet_wrap(~Age) +
+  theme_bw() 
+```
+
+```{r}
+mutate(china_hex, Age = 0) %>%
+    mutate(pred = predict(test, ., type = 'response')) %>%
+  mutate(pred = if_else(pred < 0, 0, pred)) %>%
+  mutate(Age = 6000) %>%
+      mutate(pred2 = predict(test, ., type = 'response')) %>%
+  mutate(pred2 = if_else(pred2 < 0, 0, pred2)) %>%
+  mutate(pred = pred - pred2) %>%
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu', limits = c(-4000, 4000)) +
+  theme_bw() 
 ```
 
