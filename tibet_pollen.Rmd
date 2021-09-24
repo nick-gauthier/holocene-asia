@@ -377,6 +377,45 @@ screeplot(gdd_mat)
 ```
 
 ```{r}
+gdd_wapls <- rioja::WAPLS(dat$pollen / 100, as_tibble(pts)$GDD10, npls = 10, standx = FALSE)
+gdd_cross <- crossval(gdd_wapls, cv.method = 'lgo', ngroups = 5)
+summary(gdd_cross)
+performance(gdd_cross)
+screeplot(gdd_cross)
+plot(gdd_cross)
+```
+```{r}
+gdd_wa <- rioja::WA(dat$pollen / 100, as_tibble(pts)$GDD10) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+summary(gdd_wa)
+performance(gdd_wa)
+plot(gdd_wa)
+```
+```{r}
+gdd_mlrc <- rioja::MLRC(dat$pollen / 100, as_tibble(pts)$GDD10) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+summary(gdd_mlrc)
+performance(gdd_mlrc)
+plot(gdd_mlrc)
+```
+```{r}
+gdd_LWR <- rioja::LWR(dat$pollen / 100, as_tibble(pts)$GDD10) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+summary(gdd_LWR)
+performance(gdd_LWR)
+plot(gdd_LWR)
+```
+
+```{r}
+gdd_IKFA <- rioja::IKFA(dat$pollen / 100, as_tibble(pts)$GDD10, nFact = 10, IsPoly = TRUE) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+summary(gdd_IKFA)
+performance(gdd_IKFA)
+screeplot(gdd_IKFA)
+plot(gdd_IKFA)
+```
+
+```{r}
 pastgdd <- predict(gdd_mat, dat$pollen_fossil / 100, k = 4)
 
 fossil_loc <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
