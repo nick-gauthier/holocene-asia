@@ -147,6 +147,7 @@ pollen_fossil_new %>% mutate(sums = rowSums(.)) %>%
 
 ```{r}
 pca <- prcomp(pollen, scale. = FALSE)
+pca_s <- prcomp(sqrt(pollen), scale. = FALSE) # sqrt is hellinger transformation
 ```
 
 ```{r}
@@ -169,11 +170,16 @@ pca_s$rotation[,1:2] %>% as.data.frame %>% filter(PC1 > .2)
 
 sedges are extreme on pc2 unscaled, grow along bodies of water, major grassland biomes
 ```{r}
-pca$rotation[,1:2] %>% as.data.frame %>% filter(PC2 > .2)
+pca$rotation[,1:2] %>% as.data.frame %>% filter(PC2 > .2 | PC2 < -.2)
 ```
 ```{r}
 pca_s$rotation[,1:2] %>% as.data.frame %>% filter(PC2 < -.2)
 ```
+
+```{r}
+pca$rotation[,1:3] %>% as.data.frame %>% filter(PC3 < -.2 | PC3 > .2)
+```
+
 # Climate relationships
 
 So let's build a model predict MAT and TAP from the leading 2 PCs (arborial-nonarboreal and sedges)
@@ -182,10 +188,17 @@ So let's build a model predict MAT and TAP from the leading 2 PCs (arborial-nona
 pc_scores <- pca$x %>% 
   as_tibble() %>%
   bind_cols(modern, .) %>%
-  select(PC1, PC2) %>%
+  select(PC1:PC5) %>%
   st_set_crs(4326)
 ```
 
+```{r}
+ggplot() +
+  geom_sf(data = st_as_sf(pivot_longer(as_tibble(pc_scores), PC1:PC5)), aes(color = value)) + 
+  facet_wrap(~name) +
+  scale_color_distiller(palette = 'RdBu', limits = c(-83, 83), direction = -1) +
+  theme_bw()
+```
 
 ```{r}
 ggplot() +
@@ -242,7 +255,7 @@ pts <- st_extract(clim, at = pc_scores) # bilinear = TRUE causes this to fail fo
 
 ```{r}
 library(mgcv)
-dat <- pc_scores %>%
+dat_gam <- pc_scores %>%
   mutate(mat = pts$MAT,
          tap = pts$TAP,
          gdd10 = pts$GDD10,
@@ -254,11 +267,11 @@ dat <- pc_scores %>%
 
 
 ```{r}
-m1 <- gam(mat ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
-m2 <- gam(tap ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
-m3 <- gam(gdd10 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
-m4 <- gam(npp ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
-m5 <- gam(gdd0 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat)
+m1 <- gam(mat ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
+m2 <- gam(tap ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
+m3 <- gam(gdd10 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
+m4 <- gam(npp ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
+m5 <- gam(gdd0 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
 
 summary(m1)$r.sq
 summary(m2)$r.sq
@@ -281,6 +294,19 @@ plot(m3)
 
 ```{r}
 plot(m4)
+```
+Only by incorporating space do you get a good fit above r2 of .50 and an RMSE competitive with MAT.
+```{r}
+space_mod <- bam(gdd10 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr') + s(PC3, bs = 'cr') + s(PC4, bs = 'cr') + s(PC5, bs = 'cr') + te(x, y), select = TRUE, data = dat_gam)
+
+nospace_mod <- bam(gdd10 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr') + s(PC3, bs = 'cr') + s(PC4, bs = 'cr') + s(PC5, bs = 'cr'), select = TRUE, data = dat_gam)
+
+gam.check(space_mod);gam.check(nospace_mod)
+summary(space_mod);summary(nospace_mod)
+plot(space_mod, residuals = TRUE, scheme = 2);plot(nospace_mod, residuals = TRUE, scheme = 2)
+residuals(space_mod)^2 %>% mean %>% sqrt;residuals(nospace_mod)^2 %>% mean %>% sqrt
+
+  AIC(nospace_mod,space_mod)
 ```
 
 ```{r}
@@ -309,11 +335,18 @@ plot(pts)
 
 ```{r}
 dat <- analogue::join(pollen, pollen_fossil, verbose = TRUE, type = 'inner')
+
+cr(ImbrieKipp, SumSST, tranFun = Hellinger)
 ```
 
 
+
 ```{r}
-gdd_mat <- mat(dat$pollen / 100, as_tibble(pts)$GDD10, method = "SQchord")
+gdd_pcr <- pcr(dat$pollen / 100, as_tibble(pts)$GDD10, ncomp = 10)
+gdd_pcr_hell <- pcr(dat$pollen / 100, as_tibble(pts)$GDD10, ncomp = 10, tranFun = Hellinger)
+gdd_pcr_sqrt <- pcr(sqrt(dat$pollen / 100), as_tibble(pts)$GDD10, ncomp = 10) # should be the same as above!
+
+screeplot(gdd_pcr);screeplot(gdd_pcr_hell);screeplot(gdd_pcr_sqrt)
 ```
 
 ```{r}
@@ -363,9 +396,13 @@ as_tibble(pts)$GDD10
 
 ```{r}
 library(rioja)
-rioja::MAT()
-gdd_mat <- rioja::MAT(dat$pollen / 100, as_tibble(pts)$GDD10, )
+gdd_mat <- rioja::MAT(dat$pollen / 100, as_tibble(pts)$GDD10)
 performance(gdd_mat)
+summary(gdd_mat)
+```
+
+```{r}
+plot(gdd_mat)
 ```
 
 ```{r}
@@ -418,18 +455,19 @@ plot(gdd_IKFA)
 ```{r}
 pastgdd <- predict(gdd_mat, dat$pollen_fossil / 100, k = 4)
 
-fossil_loc <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
+fossil_loc2 <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
   slice(-(1:2)) %>%
   select(`Site/Taxa`:Age)
 
 recon <- as_tibble(pastgdd$fit, rownames = 'Site/Taxa') %>%
-  left_join(fossil_loc) %>%
+  left_join(fossil_loc2) %>%
   separate(`Site/Taxa`, into = c('site', 'year'), sep = '_', extra = 'merge') %>%
   # this part required because there are sometimes extra '_'  in the site names
   separate(year, into = c('year1', 'year2'), sep = '_') %>% # this warning is ok
   mutate(site = if_else(is.na(year2), site, paste(site, year1, sep = '_'))) %>%
   select(-year1, -year2, -MAT) %>%
-  rename(gdd10 = MAT.wm)
+  rename(gdd10 = MAT.wm) %>%
+  filter(Long > 60, Age < 12000)
 ```
 ```{r}
 recon %>% count(site)
@@ -441,16 +479,13 @@ plot(fossil)
 
 ```{r}
 
-test <- bam(gdd10 ~ te(Long, Lat, Age, k = c(50, 20), d = c(2, 1), bs = c('tp', 'cr')), data = recon %>% filter(Long > 60, Age < 12000))
+test <- bam(gdd10 ~ te(Long, Lat, Age, k = c(80, 20), d = c(2, 1), bs = c('tp', 'cr')), data = recon)
 
-
-hist(residuals.gam(test))
 summary(test)
 gam.check(test)
-hist(recon$Long) ;hist(recon$Lat)
-
-ggplot(recon, aes(Long, Lat)) + geom_point()
+plot(test)
 ```
+
 ```{r}
 recon;fossil
 ```
@@ -464,8 +499,11 @@ recon %>% filter(Age < 12000) %>% pull(Age) %>% hist
 ```
 
 ```{r}
-china_hex <- china %>% st_make_grid(n = 50, square = FALSE) %>% st_as_sf() %>% mutate(Long = st_coordinates(st_centroid(.))[,1],
-                                                           Lat = st_coordinates(st_centroid(.))[,2]) %>%
+china_hex <- china %>% 
+  st_make_grid(n = 50, square = FALSE) %>% 
+  st_as_sf() %>% 
+  mutate(Long = st_coordinates(st_centroid(.))[,1],
+         Lat = st_coordinates(st_centroid(.))[,2]) %>%
     filter(st_intersects(x, china, sparse = FALSE)) %>%
   mutate(id = 1:n())
    
@@ -485,9 +523,25 @@ mutate(china_hex, Age = 0) %>%
       mutate(pred2 = predict(test, ., type = 'response')) %>%
   mutate(pred2 = if_else(pred2 < 0, 0, pred2)) %>%
   mutate(pred = pred - pred2) %>%
-  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu', limits = c(-4000, 4000)) +
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu', limits = c(-1900, 1900)) +
+  ggtitle('Change in Growing Degree Days', 'Mid Holocene to Present') +
   theme_bw() 
 ```
+
+```{r}
+mutate(china_hex, Age = 3500) %>%
+    mutate(pred = predict(test, ., type = 'response')) %>%
+  mutate(pred = if_else(pred < 0, 0, pred)) %>%
+  mutate(Age = 6000) %>%
+      mutate(pred2 = predict(test, ., type = 'response')) %>%
+  mutate(pred2 = if_else(pred2 < 0, 0, pred2)) %>%
+  mutate(pred = pred - pred2) %>%
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu') +
+  ggtitle('Change in Growing Degree Days', 'Mid Holocene to Present') +
+  geom_point(data = fossil_loc %>% filter(Long > 60), aes(Long, Lat)) +
+  theme_bw() 
+```
+
 ```{r}
 map_dfr(seq(12000, 0, -1000), ~ mutate(china_hex, Age = .)) %>%
     mutate(pred = predict(test, ., type = 'response')) %>%
@@ -497,6 +551,7 @@ map_dfr(seq(12000, 0, -1000), ~ mutate(china_hex, Age = .)) %>%
   theme_bw() 
 ```
 
+## Bins
 ```{r}
 library(exactextractr)
 gdd_dgg <- exact_extract(as(clim['GDD10'], 'Raster'), china_hex, 'mean')
@@ -508,11 +563,6 @@ china_hex %>% transmute(gdd_dgg) %>% ggplot() + geom_sf(aes(fill = gdd_dgg > 290
 ```
 repeat with bins
 ```{r}
-
-pollen;modern
-gdd_mat <- rioja::MAT(dat$pollen / 100, as_tibble(pts)$GDD10, )
-pastgdd <- predict(gdd_mat, dat$pollen_fossil / 100, k = 4)
-
 read_excel('china pollen data/China modern pollen - data.xlsx', sheet = 2, skip = 1) %>%
   slice(-(1:2)) %>%
   st_as_sf(coords = c(4,5), crs = 4326) %>%
@@ -540,7 +590,7 @@ mod_hex_pol <- read_excel('china pollen data/China modern pollen - data.xlsx', s
 
 dat2 <- mod_hex_pol %>% mutate(gdd  = gdd_dgg) %>% remove_missing()
 
-mat_bin <- MAT(dat2 %>% select(-gdd), dat2$gdd)
+mat_bin <- rioja::MAT(dat2 %>% select(-gdd), dat2$gdd)
 screeplot(mat_bin)
 ```
 
@@ -575,7 +625,7 @@ recon_mod <- as_tibble(past_gdd_bin$fit, rownames = 'id') %>%
   select(id, Age, gdd10 = MAT.wm) %>%
   left_join(china_hex, by = 'id') %>%
   filter(Long > 60, Age < 10000) %>%
-   bam(gdd10 ~ te(Long, Lat, Age, k = c(40, 30), d = c(2, 1), bs = c('tp', 'cr')), data = .)
+   bam(gdd10 ~ te(Long, Lat, Age, k = c(80, 20), d = c(2, 1), bs = c('tp', 'cr')), data = .)
 
 summary(recon_mod)
 plot(recon_mod)
@@ -590,7 +640,7 @@ mutate(china_hex, Age = 0) %>%
       mutate(pred2 = predict(test, ., type = 'response')) %>%
   mutate(pred2 = if_else(pred2 < 0, 0, pred2)) %>%
   mutate(pred = pred - pred2) %>%
-  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu', limits = c(-4000, 4000)) +
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu', limits = c(-1900, 1900)) +
   theme_bw() 
 
 #binned
@@ -601,18 +651,18 @@ mutate(china_hex, Age = 0) %>%
       mutate(pred2 = predict(recon_mod, ., type = 'response')) %>%
   mutate(pred2 = if_else(pred2 < 0, 0, pred2)) %>%
   mutate(pred = pred - pred2) %>%
-  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu', limits = c(-4000, 4000)) +
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu', limits = c(-1900, 1900)) +
   theme_bw() 
 ```
 ```{r}
 #why isn't there more variability here?
-as_tibble(past_gdd_bin$fit, rownames = 'id') %>%
+as_tibble(pastgdd$fit, rownames = 'id') %>%
   separate(id, into = c('id', 'Age')) %>%
-  mutate(id = as.numeric(id), Age = as.numeric(Age)) %>%
+  mutate( Age = as.numeric(Age)) %>%
  # left_join(fossil_poll_bin_ages) %>%
   select(id, Age, gdd10 = MAT.wm) %>%
-  filter(Age < 12000) %>%
-  ggplot(aes(-Age, gdd10, color = as.factor(id))) + 
+  filter(Age < 7500) %>%
+  ggplot(aes(-Age, gdd10, color = (id))) + 
   geom_point(alpha = .5) +
   geom_line(alpha = .3) +
   theme_bw() +
@@ -628,5 +678,99 @@ columb.polys
 
 ```{r}
 raster::getData()
+```
+
+## FRK
+
+```{r}
+library(FRK)
+library(sp)
+data("AIRS_05_2003")
+AIRS_05_2003
+class(AIRS_05_2003)
+coordinates(AIRS_05_2003) <- ~lon + lat
+proj4string(AIRS_05_2003) <- CRS("+proj=longlat +ellps=sphere")
+isea3h_sp_poldf <- auto_BAUs(manifold = sphere(), isea3h_res = 6, type = "hex", data = AIRS_05_2003)
+isea3h_sp_poldf$fs <- 1
+plot(isea3h_sp_poldf)
+```
+
+```{r}
+G <- auto_basis(manifold = sphere(), data = AIRS_05_2003_t, nres = 3,isea3h_lo = 2, type = "bisquare")
+```
+
+```{r}
+  mutate(china_hex, Age = 6000) %>%
+      mutate(pred = predict(test, ., type = 'response')) %>%
+  mutate(pred = if_else(pred < 0, 0, pred)) %>%
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu') +
+  theme_bw() 
+```
+
+
+
+```{r}
+mh_test_mod <- recon %>%
+  filter(Age > 5550 & Age < 6450 ) %>%
+  bam(gdd10 ~ te(Long, Lat, k = 10), data = .)
+mutate(china_hex) %>%
+    mutate(pred = predict(mh_test_mod, ., type = 'response')) %>%
+  mutate(pred = if_else(pred < 0, 0, pred)) %>%
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu') +
+  theme_bw() 
+```
+
+```{r}
+mutate(china_hex, Age = 4200) %>%
+    mutate(pred = predict(recon_mod, ., type = 'response')) %>%
+  mutate(pred = if_else(pred < 0, 0, pred)) %>%
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu') +
+  theme_bw() 
+```
+
+```{r}
+  mutate(china_hex, Age = 4200) %>%
+      mutate(pred = predict(test, ., type = 'response')) %>%
+  mutate(pred = if_else(pred < 0, 0, pred)) %>%
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu') +
+  theme_bw() 
+
+mutate(china_hex, Age = 0) %>%
+    mutate(pred = predict(test, ., type = 'response')) %>%
+  mutate(pred = if_else(pred < 0, 0, pred)) %>%
+  mutate(Age = 4200) %>%
+      mutate(pred2 = predict(test, ., type = 'response')) %>%
+  mutate(pred2 = if_else(pred2 < 0, 0, pred2)) %>%
+  mutate(pred = pred - pred2) %>%
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu') +
+  theme_bw() 
+```
+
+
+## Tibet
+
+```{r}
+tibet_bbox <- st_bbox(c(xmin = 65, xmax = 105, ymin = 25, ymax = 45), crs = 4326)
+tibet_mod <- recon %>%
+  filter(between(Lat, 25, 45), between(Long, 65, 105)) %>%
+   bam(gdd10 ~ te(Long, Lat, Age, k = c(80, 20), d = c(2, 1), bs = c('tp', 'cr')), data = .)
+summary(tibet_mod)
+
+```
+```{r}
+tibet_hex <- tibet_bbox %>% 
+  st_make_grid(n = 50, square = FALSE) %>% 
+  st_as_sf() %>% 
+  mutate(Long = st_coordinates(st_centroid(.))[,1],
+         Lat = st_coordinates(st_centroid(.))[,2]) %>%
+  #  filter(st_intersects(x, china, sparse = FALSE)) %>%
+  mutate(id = 1:n())
+
+map_dfr(c(0, 2000, 4000, 6000), ~ mutate(tibet_hex, Age = .)) %>%
+    mutate(pred = predict(tibet_mod, ., type = 'response')) %>%
+  mutate(pred = if_else(pred < 0, 0, pred)) %>%
+  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_viridis_c(option = 'magma') +
+    facet_wrap(~Age) +
+  theme_bw() 
 ```
 
