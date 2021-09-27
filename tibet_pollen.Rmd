@@ -3,7 +3,7 @@ title: "Pollen-based reconstruction of growing degree days over Tibet"
 output: html_notebook
 ---
 
-# Setup
+# Setup and Preproccesing
 
 Import the packages needed for this analysis. Also load a shapefile of China to use in plots.
 ```{r setup}
@@ -54,86 +54,120 @@ ggplot(aes(reorder(sample_type, n), n)) +
   labs(title = 'Modern pollen sample distribution', y = 'Count', x = 'Sample type')
 ```
 
-Check that all rows sum to 100.
+Check that all rows sum to 100, and no single value is greater than 100
 ```{r}
-all.equal(sum(rowSums(pollen[,-1])) / 100, nrow(pollen))
+all.equal(sum(rowSums(modern_pollen[,-1])) / 100, nrow(pollen))
+
+sum(rowSums(modern_pollen[,-1] > 100))
 ```
 
+## Fossil Pollen Data
 
 ```{r}
-count(modern, `Modern vegetation information (sample and its surroundings)`) %>%
-ggplot(aes(reorder(`Modern vegetation information (sample and its surroundings)`, n), n)) +
-  geom_col() +
-  coord_flip() +
-  theme_bw() +
-  labs(title = 'Modern pollen data type', y = 'Count', x = 'Data type')
-```
-
-```{r}
-modern
-```
-
-
-```{r}
-pollen <- read_excel('china pollen data/China modern pollen - data.xlsx', sheet = 2, skip = 1) %>%
-  slice(-(1:2)) %>%
-  select(-(`No.`:`Elevation (m)`)) %>%
-  mutate(across(everything(), as.numeric))
-```
-
-```{r}
-pollen_fossil <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
-  slice(-(1:2)) %>%
-  column_to_rownames("Site/Taxa") %>%
-  select(-(Long:Age)) %>%
-  mutate(across(everything(), as.numeric))
-
-# new fossil pollen data has some duplicated sample names with different values
-pollen_fossil_new <- read_excel('~/Downloads/China west fossil pollen - data from sites.xlsx') %>%
-  select(-(Site:Age))
-
-fossil_loc <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
+fossil_sites <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
   slice(-(1:2)) %>%
   select(`Site/Taxa`:Age) %>%
   separate(`Site/Taxa`, into = c('site', 'year'), sep = '_', extra = 'merge') %>%
   # this part required because there are sometimes extra '_'  in the site names
   separate(year, into = c('year1', 'year2'), sep = '_') %>% # this warning is ok
   mutate(site = if_else(is.na(year2), site, paste(site, year1, sep = '_'))) %>%
-  select(-year1, -year2)
+  select(-year1, -year2) %>%
+  # the CAOTANH site has lat and long coordinates reversed
+  mutate(lon = if_else(site == 'CAOTANH', Lat, Long),
+         lat = if_else(site == 'CAOTANH', Long, Lat)) %>%
+  select(-Long, -Lat) %>%
+    st_as_sf(coords = c(4,5), crs = 4326)
 
-# fossil_loc and fossil_loc2 are the same except for one or three samples that are missing. both have some unsual spatial locations
-fossil_loc_new <- read_excel('~/Downloads/China west fossil pollen - data from sites.xlsx') %>%
+# these are different from the associated raw data -- specifically lacking that "transect"
+fossil_sites1 <- read_excel('china pollen data/China west fossil pollen - info.xlsx', skip = 1) %>%
+  # this has two lat lon fields, the unselected ones appear to be in degrees and meters?
+  select(site = Site, elev = `Alt (m)`, type = `Sample Type`, lon = `Lon (d)`, lat = `Lat (d)`) %>%
+  # Tanggula Mt has flipped lat lon coordinates
+  mutate(lon2 = if_else(site == 'Tanggula Mt Co', lat, lon),
+         lat2 = if_else(site == 'Tanggula Mt Co', lon, lat),
+         lon = lon2, lat = lat2) %>%
+  select(-lon2, -lat2) %>%
+  st_as_sf(coords = c(4,5), crs = 4326)
+    
+# these are the same locations as china west fossil pollen - data
+fossil_sites2 <- read_excel('~/Downloads/China west fossil pollen - data from sites.xlsx') %>%
   select(Site:Age) %>%
+    slice(-n()) %>% # the last row of this file are column sums, so drop it
   separate(Site, into = c('site', 'year'), sep = '_', extra = 'merge') %>%
   # this part required because there are sometimes extra '_'  in the site names
   separate(year, into = c('year1', 'year2'), sep = '_') %>% # this warning is ok
   mutate(site = if_else(is.na(year2), site, paste(site, year1, sep = '_'))) %>%
-  select(-year1, -year2)
-
-fossil_loc %>% count(site) 
-fossil_loc_new %>% count(site) 
-
-ggplot(fossil_loc_new)  +
-  geom_sf(data= china)+ geom_point(aes(Long, Lat)) +
-  geom_sf(data = st_set_crs(fossil, 4326), color = 'red') +
-  geom_sf(data = st_set_crs(fossil2, 4326), color = 'green')
-
-
-read_excel('~/Downloads/China west fossil pollen - data from sites.xlsx') %>% filter(Site == 'SG1_0737900')
+  select(-year1, -year2) %>%
+  # the CAOTANH site has lat and long coordinates reversed
+  mutate(lon = if_else(site == 'CaotanH', Lat, Long),
+         lat = if_else(site == 'CaotanH', Long, Lat)) %>%
+  select(-Long, -Lat) %>%
+  st_as_sf(coords = c(4,5), crs = 4326)
 ```
 
-
-Check that all rows sum to 100%
 ```{r}
-all.equal(sum(rowSums(pollen)) / 100,nrow(pollen))
-rowSums(pollen_fossil) %>% hist
-rowSums(pollen_fossil_new) %>% near(100, tol = .01) %>% .[. == FALSE]
-
-pollen_fossil_new %>% mutate(sums = rowSums(.)) %>%
-  filter(sums < 99) %>%
-  select(sums)
-
+ggplot(china)  +
+  geom_sf(data= china) +
+  geom_sf(data = fossil_sites, color = 'red', size = 2) +
+  geom_sf(data = fossil_sites1, color = 'green')
 ```
+
+```{r}
+## these are the same sites, the former has the data. not all sites in the original file are in the pollen file from jade
+fossil_sites3 <- read_excel('~/Downloads/china-fossil-pollen-from Ni 2014.xlsx') %>%
+  st_as_sf(coords = c(3,4), crs = 4326)
+
+fossil_sites4 <- read_excel('~/Downloads/pollen sites fossil China - Ni 2014 palaeo3.xlsx') %>%
+  st_as_sf(coords = c(8,9), crs = 4326)
+
+ggplot(china)  +
+  geom_sf(data= china) +
+    geom_sf(data = fossil_sites4, color = 'blue', size = 2) +
+  geom_sf(data = fossil_sites3, color = 'red') 
+```
+
+```{r}
+fossil_pollen <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
+  slice(-(1:2)) %>%
+  column_to_rownames("Site/Taxa") %>%
+  select(-(Long:Age)) %>%
+  mutate(across(everything(), as.numeric))
+
+# new fossil pollen data has some duplicated sample names with different values
+fossil_pollen2 <- read_excel('~/Downloads/China west fossil pollen - data from sites.xlsx') %>%
+  slice(-n()) %>% # the last row of this file are column sums, so drop it
+  filter(Site != 'NAQ22_-010') %>% # the percentages from this sample only add to 5
+  select(-Pinus_haploxylon) %>% # this taxon appears twice (with upper and lowercase H), delete this column as the total is much smaller
+  select(-(Site:Age))
+
+fossil_pollen3 <- read_excel('~/Downloads/china-fossil-pollen-from Ni 2014.xlsx') %>%
+  select(-(`Site biomise`:Taxa))
+```
+
+Check that all rows sum to 100, and no single value is greater than 100
+```{r}
+all.equal(sum(rowSums(fossil_pollen)) / 100, nrow(fossil_pollen))
+sum(rowSums(fossil_pollen > 100))
+
+all.equal(sum(rowSums(fossil_pollen2)) / 100, nrow(fossil_pollen2))
+sum(rowSums(fossil_pollen2 > 100))
+
+all.equal(sum(rowSums(fossil_pollen3)) / 100, nrow(fossil_pollen3))
+sum(rowSums(fossil_pollen3 > 100))
+
+rowSums(fossil_pollen) %>% hist
+rowSums(fossil_pollen2) %>% hist
+rowSums(fossil_pollen3) %>% hist
+
+dim(fossil_pollen)
+dim(fossil_pollen2)
+dim(fossil_pollen3)
+
+setdiff(names(fossil_pollen), names(fossil_pollen2))
+setdiff(names(fossil_pollen2), names(fossil_pollen))
+```
+
+
 
 
 ```{r}
