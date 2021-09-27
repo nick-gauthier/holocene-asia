@@ -1,8 +1,11 @@
 ---
-title: "Tibet Pollen"
+title: "Pollen-based reconstruction of growing degree days over Tibet"
 output: html_notebook
 ---
 
+# Setup
+
+Import the packages needed for this analysis. Also load a shapefile of China to use in plots.
 ```{r setup}
 library(tidyverse)
 library(readxl)
@@ -13,61 +16,49 @@ library(stars)
 china <- rnaturalearth::ne_countries(country = 'China', returnclass = 'sf')
 ```
 
+## Modern Pollen Data
+
+Import the modern pollen data and site information.
 ```{r}
-modern <- read_excel('~/Downloads/pollen sites modern China - old+new collection in press.xlsx') %>%
-  st_as_sf(coords = c(4,5))
+modern_sites <- read_excel('china pollen data/China modern pollen - info.xlsx', sheet = 2, skip = 1) %>%
+  st_as_sf(coords = c(4,5), crs = 4326) %>%
+  select(id = No., 
+         site = `Site name`, 
+         elev = `Elevation (m)`, 
+         sample_type = `Sample type`, 
+         source = `Data source`, 
+         data_type = `Data type`, 
+         modern_veg_map = `Modern vegetation information (the Vegetation Map of China)`, 
+         modern_veg_samp = `Modern vegetation information (sample and its surroundings)`, 
+         pot_veg = `Potential vegetation (for cultivated vegetation, aquatic vegetation and other cryptic vegetation)`)
 
-fossil <- read_excel('~/Downloads/pollen sites fossil China - Ni 2014 palaeo3.xlsx') %>%
-  st_as_sf(coords = c(8,9))
-
-
-fossil2 <- read_excel('~/Downloads/china-fossil-pollen-from Ni 2014.xlsx') %>%
-  st_as_sf(coords = c(3,4))
-
-fossil1
-fossil2
-fossil3 %>% count(Site)
-fossil4 %>% count(`Site/Taxa`)
+modern_pollen <- read_excel('china pollen data/China modern pollen - data.xlsx', sheet = 2, skip = 1) %>%
+  slice(-(1:2)) %>%
+  select(-(Site:`Elevation (m)`)) %>%
+  rename(id = No.) %>%
+  mutate(across(everything(), as.numeric))
 ```
 
-```{r}
-plot(modern)
+Visualize the site data.
+```{r echo=FALSE}
+plot(modern_sites)
 ```
 
-```{r}
-plot(fossil)
-```
-
-```{r}
-head(modern)
-```
-
-```{r}
-count(modern, `Sample type`) %>%
-ggplot(aes(reorder(`Sample type`, n), n)) +
+Plot some summaries of the site data.
+```{r echo=FALSE}
+count(modern_sites, sample_type) %>%
+ggplot(aes(reorder(sample_type, n), n)) +
   geom_col() +
   coord_flip() +
   theme_bw() +
   labs(title = 'Modern pollen sample distribution', y = 'Count', x = 'Sample type')
 ```
 
+Check that all rows sum to 100.
 ```{r}
-count(modern, `Data source`) %>%
-ggplot(aes(reorder(`Data source`, n), n)) +
-  geom_col() +
-  coord_flip() +
-  theme_bw() +
-  labs(title = 'Modern pollen data sources', y = 'Count', x = 'Data source')
+all.equal(sum(rowSums(pollen[,-1])) / 100, nrow(pollen))
 ```
 
-```{r}
-count(modern, `Data type`) %>%
-ggplot(aes(reorder(`Data type`, n), n)) +
-  geom_col() +
-  coord_flip() +
-  theme_bw() +
-  labs(title = 'Modern pollen data type', y = 'Count', x = 'Data type')
-```
 
 ```{r}
 count(modern, `Modern vegetation information (sample and its surroundings)`) %>%
