@@ -329,28 +329,23 @@ plot(clim['GDD10'])
 
 
 ```{r}
-clim %>%
-  st_as_stars %>%
-  as_tibble %>%
-  ggplot(aes(MAT, GDD10)) +
-  geom_point()
-```
-
-
-```{r}
-pts <- st_extract(clim, at = pc_scores) # bilinear = TRUE causes this to fail for some reason
-```
-
-```{r}
-library(mgcv)
-dat_gam <- pc_scores %>%
+pts <- st_extract(clim, at = ica_scores) # bilinear = TRUE causes this to fail for some reason
+dat_gam <- ica_scores %>%
   mutate(mat = pts$MAT,
          tap = pts$TAP,
-         gdd10 = pts$GDD10,
          gdd0 = pts$GDD0,
+         gdd5 = pts$GDD5,
+         gdd10 = pts$GDD10,
          npp = pts$NPP,
          x = st_coordinates(.)[,1],
-         y = st_coordinates(.)[,2])
+         y = st_coordinates(.)[,2]) %>%
+  st_drop_geometry()
+```
+
+```{r}
+dat_gam %>%
+  select(-(V5:V9)) %>%
+  pairs()
 ```
 
 
@@ -411,137 +406,37 @@ summary(m5)$r.sq
 ```{r}
 plot(m5, scale = 0)
 ```
-## Modern Analogue technique
+
+## Modern Analogue Technique
 
 ```{r}
-library(analogue)
-```
-
-```{r}
-plot(pts)
-```
-
-```{r}
-dat <- analogue::join(pollen, pollen_fossil, verbose = TRUE, type = 'inner')
-
-cr(ImbrieKipp, SumSST, tranFun = Hellinger)
-```
-
-
-
-```{r}
-gdd_pcr <- pcr(dat$pollen / 100, as_tibble(pts)$GDD10, ncomp = 10)
-gdd_pcr_hell <- pcr(dat$pollen / 100, as_tibble(pts)$GDD10, ncomp = 10, tranFun = Hellinger)
-gdd_pcr_sqrt <- pcr(sqrt(dat$pollen / 100), as_tibble(pts)$GDD10, ncomp = 10) # should be the same as above!
-
-screeplot(gdd_pcr);screeplot(gdd_pcr_hell);screeplot(gdd_pcr_sqrt)
-```
-
-```{r}
-gdd_mat
-```
-
-```{r}
-summary(gdd_mat)
-```
-```{r}
-getK(gdd_mat)
-```
-
-```{r}
-plot(gdd_mat)
-```
-
-```{r}
-gdd_boot <- bootstrap(gdd_mat, n.boot = 25)
-gdd_boot
-#setK(gdd_mat) <- getK(gdd_boot)
-```
-
-```{r}
-plot(pts %>% select(GDD10))
-```
-
-```{r}
-pastgdd <- predict(gdd_mat, dat$pollen_fossil / 100)
-pastgdd$predictions$model$predicted %>% colMeans()
-```
-
-```{r}
-pastgdd
-```
-
-```{r}
-dat$pollen_fossil %>% as_tibble() %>% mutate(test = pastgdd)
-```
-
-```{r}
-
-dat$pollen_fossil
-as_tibble(pts)$GDD10
+dat <- analogue::join(modern_pollen, fossil_pollen, verbose = TRUE, type = 'inner')
+dat2 <- analogue::join(modern_pollen, fossil_pollen2, verbose = TRUE, type = 'inner')
+dat3 <- analogue::join(modern_pollen, fossil_pollen3, verbose = TRUE, type = 'inner')
 ```
 
 
 ```{r}
-library(rioja)
-gdd_mat <- rioja::MAT(dat$pollen / 100, as_tibble(pts)$GDD10)
-performance(gdd_mat)
-summary(gdd_mat)
-```
-
-```{r}
-plot(gdd_mat)
-```
-
-```{r}
-print(gdd_mat)
-```
-
-```{r}
-screeplot(gdd_mat)
-```
-
-```{r}
-gdd_wapls <- rioja::WAPLS(dat$pollen / 100, as_tibble(pts)$GDD10, npls = 10, standx = FALSE)
-gdd_cross <- crossval(gdd_wapls, cv.method = 'lgo', ngroups = 5)
-summary(gdd_cross)
-performance(gdd_cross)
-screeplot(gdd_cross)
-plot(gdd_cross)
-```
-```{r}
-gdd_wa <- rioja::WA(dat$pollen / 100, as_tibble(pts)$GDD10) %>%
+mat_gdd0 <- rioja::MAT(dat$modern_pollen / 100, as_tibble(pts)$GDD0, lean = FALSE) %>%
   crossval(cv.method = 'lgo', ngroups = 5)
-summary(gdd_wa)
-performance(gdd_wa)
-plot(gdd_wa)
-```
-```{r}
-gdd_mlrc <- rioja::MLRC(dat$pollen / 100, as_tibble(pts)$GDD10) %>%
+mat_gdd5 <- rioja::MAT(dat$modern_pollen / 100, as_tibble(pts)$GDD5, lean = FALSE) %>%
   crossval(cv.method = 'lgo', ngroups = 5)
-summary(gdd_mlrc)
-performance(gdd_mlrc)
-plot(gdd_mlrc)
-```
-```{r}
-gdd_LWR <- rioja::LWR(dat$pollen / 100, as_tibble(pts)$GDD10) %>%
+mat_gdd10 <- rioja::MAT(dat$modern_pollen / 100, as_tibble(pts)$GDD10, lean = FALSE) %>%
   crossval(cv.method = 'lgo', ngroups = 5)
-summary(gdd_LWR)
-performance(gdd_LWR)
-plot(gdd_LWR)
+
+screeplot(mat_gdd0);screeplot(mat_gdd5);screeplot(mat_gdd10)
 ```
 
 ```{r}
-gdd_IKFA <- rioja::IKFA(dat$pollen / 100, as_tibble(pts)$GDD10, nFact = 10, IsPoly = TRUE) %>%
-  crossval(cv.method = 'lgo', ngroups = 5)
-summary(gdd_IKFA)
-performance(gdd_IKFA)
-screeplot(gdd_IKFA)
-plot(gdd_IKFA)
+plot(mat_gdd0);plot(mat_gdd5);plot(mat_gdd10)
 ```
 
+
+
+# Past Climate
+
 ```{r}
-pastgdd <- predict(gdd_mat, dat$pollen_fossil / 100, k = 4)
+pastgdd <- predict(gdd_mat, dat$fossil_pollen / 100, k = 4)
 
 fossil_loc2 <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
   slice(-(1:2)) %>%
@@ -859,6 +754,56 @@ map_dfr(c(0, 2000, 4000, 6000), ~ mutate(tibet_hex, Age = .)) %>%
   mutate(pred = if_else(pred < 0, 0, pred)) %>%
   ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_viridis_c(option = 'magma') +
     facet_wrap(~Age) +
-  theme_bw() 
+  theme_bw()  +
+  geom_point(data = recon %>% filter(between(Lat, 25, 45), between(Long, 65, 105)) %>% group_by(Lat, Long) %>% summarise(Lat = mean(Lat), Long = mean(Long), age = 0), aes(Long, Lat))
 ```
 
+# Other Methods
+
+Comparison of other pollen reconstruction methods.
+
+
+```{r}
+gdd0_pcr <- pcr(dat$modern_pollen / 100, as_tibble(pts)$GDD0, ncomp = 10, tranFun = Hellinger)
+gdd5_pcr <- pcr(dat$modern_pollen / 100, as_tibble(pts)$GDD5, ncomp = 10, tranFun = Hellinger)
+gdd10_pcr <- pcr(dat$modern_pollen / 100, as_tibble(pts)$GDD10, ncomp = 10, tranFun = Hellinger)
+
+screeplot(gdd0_pcr);screeplot(gdd5_pcr);screeplot(gdd10_pcr)
+```
+
+```{r}
+gdd0_wapls <- rioja::WAPLS(dat$modern_pollen / 100, as_tibble(pts)$GDD0, 
+                           npls = 10, 
+                           standx = FALSE) %>% 
+  crossval(gdd0_wapls, cv.method = 'lgo', ngroups = 5)
+
+screeplot(gdd0_wapls)
+plot(gdd0_wapls)
+```
+
+
+```{r}
+gdd_wa <- rioja::WA(dat$modern_pollen / 100, as_tibble(pts)$GDD10) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+plot(gdd_wa)
+```
+
+```{r}
+gdd_mlrc <- rioja::MLRC(dat$modern_pollen / 100, as_tibble(pts)$GDD10) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+plot(gdd_mlrc)
+```
+
+```{r}
+gdd_LWR <- rioja::LWR(dat$modern_pollen / 100, as_tibble(pts)$GDD10) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+plot(gdd_LWR)
+```
+
+```{r}
+gdd_IKFA <- rioja::IKFA(dat$modern_pollen / 100, as_tibble(pts)$GDD10, nFact = 10, IsPoly = TRUE) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+
+screeplot(gdd_IKFA)
+plot(gdd_IKFA)
+```
