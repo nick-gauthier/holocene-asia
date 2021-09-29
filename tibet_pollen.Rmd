@@ -15,6 +15,7 @@ library(stars)
 library(rioja)
 library(mgcv)
 library(exactextractr)
+library(fields)
 
 china <- rnaturalearth::ne_countries(country = 'China', returnclass = 'sf')
 tibet <- read_sf('~/Downloads/DBATP/DBATP_Polygon.shp') # source http://www.geodoi.ac.cn/weben/doi.aspx?Id=135
@@ -57,6 +58,13 @@ ggplot(aes(reorder(sample_type, n), n)) +
   theme_bw() +
   labs(title = 'Modern pollen sample distribution', y = 'Count', x = 'Sample type')
 ```
+```{r}
+ggplot(modern_sites) +
+  geom_sf(data = china) +
+  geom_sf(aes(color = sample_type)) +
+  theme_bw()
+```
+
 
 Check that all rows sum to 100, and no single value is greater than 100
 ```{r}
@@ -222,7 +230,7 @@ pca_s$rotation[,1, drop = FALSE] %>% as.data.frame %>% filter(PC1 > .2 | PC1 < -
 pca_s$rotation[,2, drop = FALSE] %>% as.data.frame %>% filter(PC2 > .2 | PC2 < -.2)
 ```
 
-## Climate relationships
+### PCA
 
 
 ```{r}
@@ -301,87 +309,60 @@ ggplot() +
   ggtitle('Modern Sedge/Non-Sedge Pollen concentration')
 ```
 
-## Modern Climate
+## Climate data
 
 ```{r}
-
-read_stars('/vsigzip//Users/nick/Downloads/CMFD/temp_CMFD_V0106_B-01_01dy_010deg_197901-197912.nc.gz')
-```
-
-
-```{r}
-ref <- st_bbox(pc_scores) %>%
-  st_as_stars(dx = 0.1)
-
-clim <- c('~/Desktop/CHELSA_bio1_1981-2010_V.2.1.tif',
-         '~/Desktop/CHELSA_bio12_1981-2010_V.2.1.tif',
-         '~/Desktop/CHELSA_npp_1981-2010_V.2.1.tif',
-         '~/Desktop/CHELSA_gdd0_1981-2010_V.2.1.tif',
-         '~/Desktop/CHELSA_gdd5_1981-2010_V.2.1.tif',
-         '~/Desktop/CHELSA_gdd10_1981-2010_V.2.1.tif') %>%
-  read_stars() %>%
-  st_crop(ref) %>%
-  setNames(c('MAT', 'TAP', 'NPP', 'GDD0', 'GDD5', 'GDD10')) %>%
-  mutate(GDD0 = replace_na(GDD0, 0),
-         GDD5 = replace_na(GDD5, 0),
-         GDD10 = replace_na(GDD10, 0)) %>%
-  st_as_stars() #%>%
- # st_warp(ref, use_gdal = TRUE, method = 'average') %>%
-  #setNames(c('MAT', 'TAP', 'NPP', 'GDD0', 'GDD5', 'GDD10'))
+cmfd <- list.files('~/Downloads/CMFD', full.names = TRUE) %>% map(~read_ncdf(., eps = 0.001, var = 'temp') %>%
+  mutate(temp = units::set_units(temp, degree_C) %>% units::drop_units()) %>%
+  transmute(gdd0 = if_else(temp > 0, temp, 0) - 0,
+            gdd5 = if_else(temp > 5.5, temp, 5.5) - 5.5) %>%
+  st_apply(1:2, sum) %>%
+  merge()) %>%
+  do.call(c, .)%>%
+  merge(name = 'time') %>%
+  st_set_dimensions('time', values = 1979:2018) %>%
+  split('attributes')
+gc()
 ```
 
 ```{r}
-plot(clim['MAT'])
-plot(clim['TAP'])
-plot(clim['NPP'])
-plot(clim['GDD0'])
-plot(clim['GDD5'])
-plot(clim['GDD10'])
+ggplot() +
+  geom_stars(data = st_apply(cmfd['gdd0'], 1:2, mean)) +
+  scale_fill_viridis_c(option = 'magma', na.value = NA) +
+  theme_bw()
+ggplot() +
+  geom_stars(data = st_apply(cmfd['gdd5'], 1:2, mean)) +
+  scale_fill_viridis_c(option = 'magma', na.value = NA) +
+  theme_bw()
+```
+```{r}
+pts <- st_extract(st_apply(cmfd, 1:2, mean), at = modern_sites)
 ```
 
-
+Remove sites that fall outside the CMFD boundaries
 ```{r}
-pts <- st_extract(clim, at = ica_scores) # bilinear = TRUE causes this to fail for some reason
-dat_gam <- ica_scores %>%
-  mutate(mat = pts$MAT,
-         tap = pts$TAP,
-         gdd0 = pts$GDD0,
-         gdd5 = pts$GDD5,
-         gdd10 = pts$GDD10,
-         npp = pts$NPP,
-         x = st_coordinates(.)[,1],
-         y = st_coordinates(.)[,2]) %>%
-  st_drop_geometry()
-```
+outside_ids <- pts %>%
+  bind_cols(modern_sites) %>%
+  filter(is.na(gdd0)) %>%
+  pull(id)
 
-```{r}
-dat_gam %>%
-  select(-(V5:V9)) %>%
-  pairs()
-```
+modern_sites <- modern_sites %>% 
+  filter(!(id %in% outside_ids))
 
+modern_pollen <- modern_pollen %>%
+  rownames_to_column() %>%
+  filter(!(as.numeric(rowname) %in% outside_ids))
 
-```{r}
-m1 <- gam(mat ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
-m2 <- gam(tap ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
-m3 <- gam(gdd10 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
-m4 <- gam(npp ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
-m5 <- gam(gdd0 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr'), method = 'REML', select = TRUE, data = dat_gam)
-
-summary(m1)$r.sq
-summary(m2)$r.sq
-summary(m3)$r.sq
-summary(m4)$r.sq
-summary(m5)$r.sq
+ggplot() +
+  geom_stars(data = cmfd[1,,,1]) +
+  geom_sf(data = pts, aes(color = is.na(gdd0))) +
+  scale_color_viridis_d()
 ```
 
 ```{r}
-plot(m1)
+pts <- st_extract(st_apply(cmfd, 1:2, mean), at = modern_sites)
 ```
 
-```{r}
-plot(m2)
-```
 
 ```{r}
 plot(m3)
