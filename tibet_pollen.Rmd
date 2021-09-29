@@ -363,49 +363,53 @@ ggplot() +
 pts <- st_extract(st_apply(cmfd, 1:2, mean), at = modern_sites)
 ```
 
+## Modern Analogues
 
 ```{r}
-plot(m3)
+dat <- Merge(modern_pollen, fossil_pollen, join = 'inner', split = TRUE)
+```
+
+
+```{r}
+mat_gdd0 <- MAT(dat$modern_pollen / 100, as_tibble(pts)$gdd0 , lean = FALSE) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+mat_gdd5 <- MAT(dat$modern_pollen / 100, as_tibble(pts)$gdd5, lean = FALSE) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+
+screeplot(mat_gdd0);screeplot(mat_gdd5)
 ```
 
 ```{r}
-plot(m4)
-```
-Only by incorporating space do you get a good fit above r2 of .50 and an RMSE competitive with MAT.
-```{r}
-space_mod <- bam(gdd10 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr') + s(PC3, bs = 'cr') + s(PC4, bs = 'cr') + s(PC5, bs = 'cr') + te(x, y), select = TRUE, data = dat_gam)
-
-nospace_mod <- bam(gdd10 ~ s(PC1, bs = 'cr') + s(PC2, bs = 'cr') + s(PC3, bs = 'cr') + s(PC4, bs = 'cr') + s(PC5, bs = 'cr'), select = TRUE, data = dat_gam)
-
-gam.check(space_mod);gam.check(nospace_mod)
-summary(space_mod);summary(nospace_mod)
-plot(space_mod, residuals = TRUE, scheme = 2);plot(nospace_mod, residuals = TRUE, scheme = 2)
-residuals(space_mod)^2 %>% mean %>% sqrt;residuals(nospace_mod)^2 %>% mean %>% sqrt
-
-  AIC(nospace_mod,space_mod)
+plot(mat_gdd0, k = 3, wMean = TRUE);plot(mat_gdd5,k = 3, wMean = TRUE)
 ```
 
 ```{r}
-pc_scores %>%
-  ggplot(aes(PC1, PC2)) +
-  geom_point(alpha = .2)
-```
-How about the forward model?
-```{r}
-m5 <- gam(PC1 ~ s(mat, bs = 'cr') + s(npp, bs = 'cr') + s(tap, bs = 'cr') + s(gdd10, bs = 'cr'), data = dat, method = 'REML', select = TRUE)
+modern_sites %>%
+  mutate(gdd0_resid = mat_gdd0$residuals.cv[,'N03.wm'],
+         gdd5_resid = mat_gdd5$residuals.cv[,'N03.wm']) %>%
+  arrange(abs(gdd0_resid)) %>%
+  ggplot() +
+  geom_sf(data = china, fill = 'lightgrey') +
+  geom_sf(aes(color = gdd0_resid)) +
+  scale_color_distiller(palette = 'RdBu', limits = c(-8100, 8100)) +
+  theme_bw()
 
-summary(m5)$r.sq
-```
-```{r}
-plot(m5, scale = 0)
+modern_sites %>%
+  mutate(gdd0_resid = mat_gdd0$residuals.cv[,'N03.wm'],
+         gdd5_resid = mat_gdd5$residuals.cv[,'N03.wm']) %>%
+  arrange(abs(gdd5_resid)) %>%
+  ggplot() +
+  geom_sf(data = china, fill = 'lightgrey') +
+  geom_sf(aes(color = gdd5_resid)) +
+  scale_color_distiller(palette = 'RdBu', limits = c(-6600, 6600)) +
+  theme_bw()
 ```
 
-## Modern Analogue Technique
-
 ```{r}
-dat <- analogue::join(modern_pollen, fossil_pollen, verbose = TRUE, type = 'inner')
-dat2 <- analogue::join(modern_pollen, fossil_pollen2, verbose = TRUE, type = 'inner')
-dat3 <- analogue::join(modern_pollen, fossil_pollen3, verbose = TRUE, type = 'inner')
+modern_sites %>%
+  mutate(gdd0_resid = mat_gdd0$residuals.cv[,'N03.wm'],
+         gdd5_resid = mat_gdd5$residuals.cv[,'N03.wm']) %>%
+  filter(gdd0_resid > 8000)
 ```
 
 H-block cross validation
@@ -421,8 +425,6 @@ mat_gdd5 <- MAT(dat$modern_pollen / 100, as_tibble(pts)$gdd5, lean = FALSE) %>%
 screeplot(mat_gdd0);screeplot(mat_gdd0_hblock)
 
 ```
-
-
 
 # Past Climate
 
@@ -456,12 +458,10 @@ ggplot() +
 ```{r}
 pastgdd0 <- predict(mat_gdd0, dat$fossil_pollen / 100, k = 3)
 pastgdd5 <- predict(mat_gdd5, dat$fossil_pollen / 100, k = 3)
-pastgdd10 <- predict(mat_gdd10, dat$fossil_pollen / 100, k = 3)
 
 tibet_recon <- fossil_sites %>%
   mutate(gdd0 = pastgdd0$fit[,2],
          gdd5 = pastgdd5$fit[,2],
-         gdd10 = pastgdd10$fit[,2],
          x = st_coordinates(geometry)[,1],
          y = st_coordinates(geometry)[,2]) %>%
   filter(Age <= 7000) %>%
@@ -470,61 +470,38 @@ tibet_recon <- fossil_sites %>%
   as_tibble()
 ```
 
-## Interpolation
 
 ```{r}
-
-test <- bam(gdd0 ~ te(x, y, Age, d = c(2, 1), bs = c('tp', 'cr')), data = tibet_recon)
-test2 <- bam(gdd0 ~ te(x, y, Age, d = c(2, 1), bs = c('tp', 'cr')) + s(Alt, k = 5, bs = 'cr'), data = tibet_recon)
-test3 <- bam(gdd0 ~ te(x, y, Age, k = c(50, 20), d = c(2, 1), bs = c('tp', 'cr')), data = tibet_recon)
-test4 <- bam(gdd0 ~ te(x, y, Age, k = c(50, 20), d = c(2, 1), bs = c('tp', 'cr')) + s(Alt, k = 5, bs = 'cr'), data = tibet_recon)
-
-#
-
-summary(test);summary(test2);summary(test3);summary(test4)
-gam.check(test2)
-plot(test);plot(test2);plot(test3);plot(test4)
+as_tibble(pastgdd0$fit, rownames = 'id') %>%
+  separate(id, into = c('id', 'Age')) %>%
+  mutate( Age = as.numeric(Age)) %>%
+  select(id, Age, gdd0 = MAT.wm) %>%
+  filter(between(Age, 3500, 4500)) %>%
+  ggplot(aes(-Age, gdd0, color = (id))) + 
+  geom_line(alpha = .3) +
+  theme_bw() +
+  geom_smooth() +
+  guides(color = 'none')
 ```
 
+## Interpolation
+
+
 ```{r}
-library(fields)
-test_tps <- Tps(tibet_recon[,c(7,8,2,3)], tibet_recon$gdd0)
+test_tps <- Tps(tibet_recon[,c(6,7,2,3)], tibet_recon$gdd0)
 plot(test_tps)
 summary(test_tps)
 ```
-```{r}
-test_tps2 <- Tps(tibet_recon[,c(7,8,3)], tibet_recon$gdd0, Z = tibet_recon$Alt)
-plot(test_tps2)
-summary(test_tps)
-```
-```{r}
-test_tps3 <- Tps(tibet_recon[,c(7,8,3)], tibet_recon$gdd0)
-plot(test_tps3)
-```
-
 
 ```{r}
-map_dfr(c(0, 6000), ~ mutate(tibet_hex, Age = .)) %>%
-    mutate(pred = predict(test4, ., type = 'response')) %>%
-  mutate(pred = if_else(pred < 0, 0, pred)) %>%
-  ggplot() + 
-  geom_sf(aes(fill = pred) ,size = .1) + 
-  scale_fill_viridis_c(option = 'magma', limits = c(0, 4000)) +
-  facet_wrap(~Age) + 
-  geom_sf(data = tibet, fill = NA) +
-  geom_sf(data = fossil_sites %>% filter(Age <= 9000) %>% group_by(site) %>% slice_sample(n = 1) %>% select(-Age) %>% ungroup %>%
-  filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), alpha = .5) +
-  theme_bw() 
-```
-
-```{r}
-new_prd <- map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
+new_prd <- map_dfr(c(0, 2000, 4000, 6000), ~ mutate(tibet_hex, Age = .)) %>%
     as_tibble %>%
   select(x,y,Alt, Age) %>%
 remove_missing() %>%
       mutate(pred = predict(test_tps,x = .)) %>%
   mutate(pred = if_else(pred < 0, 0, pred))
-map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
+
+map_dfr(c(0, 2000, 4000, 6000), ~ mutate(tibet_hex, Age = .)) %>%
   remove_missing() %>%
   mutate(pred = new_prd$pred) %>%
   ggplot() + 
@@ -536,68 +513,11 @@ map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
   filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), alpha = .5) +
   theme_bw() 
 ```
-```{r}
-new_prd2 <- map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
-    as_tibble %>%
-  select(x,y,Alt, Age) %>%
-remove_missing() %>%
-      mutate(pred = predict(test_tps2,x = .[,c(1,2,4)], Z = .$Alt)) %>%
-  mutate(pred = if_else(pred < 0, 0, pred))
-map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
-  remove_missing() %>%
-  mutate(pred = new_prd2$pred) %>%
-  ggplot() + 
-  geom_sf(aes(fill = pred) ,size = .1) + 
-  scale_fill_viridis_c(option = 'magma') +
-  facet_wrap(~Age) + 
-  geom_sf(data = tibet, fill = NA) +
-  geom_sf(data = fossil_sites %>% filter(Age <= 9000) %>% group_by(site) %>% slice_sample(n = 1) %>% select(-Age) %>% ungroup %>%
-  filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), alpha = .5) +
-  theme_bw() 
-```
-```{r}
-new_prd3 <- map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
-    as_tibble %>%
-  select(x,y,Alt, Age) %>%
-remove_missing() %>%
-      mutate(pred = predict(test_tps3,x = .[,c(1,2,4)])) %>%
-  mutate(pred = if_else(pred < 0, 0, pred))
-map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
-  remove_missing() %>%
-  mutate(pred = new_prd3$pred) %>%
-  ggplot() + 
-  geom_sf(aes(fill = pred) ,size = .1) + 
-  scale_fill_viridis_c(option = 'magma') +
-  facet_wrap(~Age) + 
-  geom_sf(data = tibet, fill = NA) +
-  geom_sf(data = fossil_sites %>% filter(Age <= 9000) %>% group_by(site) %>% slice_sample(n = 1) %>% select(-Age) %>% ungroup %>%
-  filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), alpha = .5) +
-  theme_bw() 
-```
+
 
 ```{r}
-tibet_hex %>% transmute(gdd0 = exact_extract(as(clim['GDD0'], 'Raster'), ., 'mean')) %>% ggplot() + geom_sf(aes(fill = gdd0), size = .1) + scale_fill_viridis_c(option = 'magma') + theme_bw()
+tibet_hex %>% transmute(gdd0 = exact_extract(as(st_apply(cmfd['gdd0'], 1:2, mean), 'Raster'), ., 'mean')) %>% ggplot() + geom_sf(aes(fill = gdd0), size = .1) + scale_fill_viridis_c(option = 'magma') + theme_bw()
 ```
-The base gam doesn't to a great job of interpolating
-```{r}
-tibet_hex %>% mutate(Age = -50) %>%
-  mutate(gdd0 = exact_extract(as(clim['GDD0'], 'Raster'), ., 'mean'),
-  pred = predict(test4, ., type = 'response'),
-  pred = if_else(pred < 0, 0, pred)) %>%
-  ggplot(aes(gdd0, pred)) +
-  geom_point() +
-  geom_smooth() +
-  theme_bw()
-```
-```{r}
-tibet_hex %>%
-  mutate(gdd0 = exact_extract(as(clim['GDD0'], 'Raster'), ., 'mean')) %>%
-  ggplot(aes(Alt, gdd0)) +
-  geom_point() +
-  geom_smooth() +
-  theme_bw()
-```
-
 
 
 ```{r}
@@ -613,19 +533,6 @@ mutate(china_hex, Age = 0) %>%
   theme_bw() 
 ```
 
-```{r}
-mutate(china_hex, Age = 3500) %>%
-    mutate(pred = predict(test, ., type = 'response')) %>%
-  mutate(pred = if_else(pred < 0, 0, pred)) %>%
-  mutate(Age = 6000) %>%
-      mutate(pred2 = predict(test, ., type = 'response')) %>%
-  mutate(pred2 = if_else(pred2 < 0, 0, pred2)) %>%
-  mutate(pred = pred - pred2) %>%
-  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_distiller(palette ='RdBu') +
-  ggtitle('Change in Growing Degree Days', 'Mid Holocene to Present') +
-  geom_point(data = fossil_loc %>% filter(Long > 60), aes(Long, Lat)) +
-  theme_bw() 
-```
 
 ```{r}
 map_dfr(seq(7000, 0, -1000), ~ mutate(tibet_hex, Age = .)) %>%
