@@ -12,7 +12,6 @@ library(readxl)
 library(sf)
 library(scico)
 library(stars)
-library(analogue)
 library(rioja)
 library(mgcv)
 library(exactextractr)
@@ -428,20 +427,18 @@ dat2 <- analogue::join(modern_pollen, fossil_pollen2, verbose = TRUE, type = 'in
 dat3 <- analogue::join(modern_pollen, fossil_pollen3, verbose = TRUE, type = 'inner')
 ```
 
+H-block cross validation
 
 ```{r}
-mat_gdd0 <- rioja::MAT(dat$modern_pollen / 100, as_tibble(pts)$GDD0, lean = FALSE) %>%
-  crossval(cv.method = 'lgo', ngroups = 5)
-mat_gdd5 <- rioja::MAT(dat$modern_pollen / 100, as_tibble(pts)$GDD5, lean = FALSE) %>%
-  crossval(cv.method = 'lgo', ngroups = 5)
-mat_gdd10 <- rioja::MAT(dat$modern_pollen / 100, as_tibble(pts)$GDD10, lean = FALSE) %>%
+dist_mat <- st_distance(pts)
+
+mat_gdd0_hblock <- MAT(dat$modern_pollen / 100, as_tibble(pts)$gdd0 , lean = FALSE) %>%
+  crossval(cv.method = 'h-block', h.cutoff = units::set_units(100000, m), h.dist = dist_mat)
+mat_gdd5 <- MAT(dat$modern_pollen / 100, as_tibble(pts)$gdd5, lean = FALSE) %>%
   crossval(cv.method = 'lgo', ngroups = 5)
 
-screeplot(mat_gdd0);screeplot(mat_gdd5);screeplot(mat_gdd10)
-```
+screeplot(mat_gdd0);screeplot(mat_gdd0_hblock)
 
-```{r}
-plot(mat_gdd0, k = 3, wMean = TRUE);plot(mat_gdd5,k = 3, wMean = TRUE);plot(mat_gdd10,k = 3, wMean = TRUE)
 ```
 
 
@@ -886,73 +883,33 @@ map_dfr(c(0, 2000, 4000, 6000), ~ mutate(tibet_hex, Age = .)) %>%
 
 Comparison of other pollen reconstruction methods.
 
-
 ```{r}
-gdd0_pcr <- pcr(dat$modern_pollen / 100, as_tibble(pts)$GDD0, ncomp = 10, tranFun = Hellinger)
-gdd5_pcr <- pcr(dat$modern_pollen / 100, as_tibble(pts)$GDD5, ncomp = 10, tranFun = Hellinger)
-gdd10_pcr <- pcr(dat$modern_pollen / 100, as_tibble(pts)$GDD10, ncomp = 10, tranFun = Hellinger)
-
-screeplot(gdd0_pcr);screeplot(gdd5_pcr);screeplot(gdd10_pcr)
-```
-
-```{r}
-gdd10_wapls <- rioja::WAPLS(sqrt(dat$modern_pollen / 100), as_tibble(pts)$GDD10, 
+gdd_wapls <- WAPLS(sqrt(dat$modern_pollen[,-298] / 100), as_tibble(pts)$gdd0, 
                            npls = 10,
                            standx = FALSE) %>% 
-  crossval(cv.method = 'lgo', ngroups = 5)
-summary(gdd10_wapls)
-screeplot(gdd10_wapls)
-plot(gdd10_wapls, npls = 4)
-```
-
-
-```{r}
-gdd10_wa <- rioja::WA(dat$modern_pollen / 100, as_tibble(pts)$GDD10) %>%
-  crossval(cv.method = 'lgo', ngroups = 5)
-
-plot(gdd10_wa)
+  crossval(cv.method = 'h-block', h.cutoff = units::set_units(200000, m), h.dist = dist_mat)
+screeplot(gdd_wapls)
+plot(gdd_wapls, npls = 4)
 ```
 
 ```{r}
-gdd_mlrc <- rioja::MLRC(dat$modern_pollen / 100, as_tibble(pts)$GDD10) %>%
-  crossval(cv.method = 'lgo', ngroups = 5)
-plot(gdd_mlrc)
-```
-
-```{r}
-gdd_LWR <- rioja::LWR(dat$modern_pollen / 100, as_tibble(pts)$GDD10) %>%
+gdd_LWR <- rioja::LWR(sqrt(dat$modern_pollen / 100), as_tibble(pts)$gdd0) %>%
   crossval(cv.method = 'lgo', ngroups = 5)
 plot(gdd_LWR)
 
 length(gdd_LWR$x)
 plot(gdd_LWR$x, gdd_LWR$predicted[,1])
-```
-```{r}
-gdd_LWR_sqrt <- rioja::LWR(sqrt(dat$modern_pollen / 100), as_tibble(pts)$GDD10) %>%
-  crossval(cv.method = 'lgo', ngroups = 5)
-summary(gdd_LWR_sqrt);summary(gdd_LWR)
 
-plot(gdd_LWR$x, gdd_LWR$predicted[,1])
-plot(gdd_LWR_sqrt$x, gdd_LWR_sqrt$predicted[,1])
-
+colSums(dat$modern_pollen)
 ```
 
 ```{r}
-gdd_IKFA <- rioja::IKFA(dat$modern_pollen / 100, as_tibble(pts)$GDD10, nFact = 10, IsPoly = TRUE) %>%
-  crossval(cv.method = 'lgo', ngroups = 5)
+gdd_IKFA <- rioja::IKFA(dat$modern_pollen[,-298] / 100, as_tibble(pts)$gdd0, nFact = 15) %>%
+  crossval(cv.method = 'h-block', h.cutoff = units::set_units(200000, m), h.dist = dist_mat)
 
 screeplot(gdd_IKFA)
-plot(gdd_IKFA)
-```
-#  china recon
-```{r}
-china_hex <- china %>% 
-  st_make_grid(n = 50, square = FALSE) %>% 
-  st_as_sf() %>% 
-  rename(geometry = x) %>%
-  mutate(x = st_coordinates(st_centroid(.))[,1],
-         y = st_coordinates(st_centroid(.))[,2]) %>%
-  filter(st_intersects(geometry, china, sparse = FALSE)) %>%
-  mutate(id = 1:n())
+plot(gdd_IKFA, nFact)
+
+gdd_IKFA$ccoef
 ```
 
