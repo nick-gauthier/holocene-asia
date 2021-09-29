@@ -5,7 +5,7 @@ output: html_notebook
 
 # Setup and Preproccesing
 
-Import the packages needed for this analysis. Also load a shapefile of China to use in plots.
+Import the packages needed for this analysis. Also load a shapefile of China and the Tibetan Plateau to use in plots.
 ```{r setup}
 library(tidyverse)
 library(readxl)
@@ -15,8 +15,10 @@ library(stars)
 library(analogue)
 library(rioja)
 library(mgcv)
+library(exactextractr)
 
 china <- rnaturalearth::ne_countries(country = 'China', returnclass = 'sf')
+tibet <- read_sf('~/Downloads/DBATP/DBATP_Polygon.shp') # source http://www.geodoi.ac.cn/weben/doi.aspx?Id=135
 ```
 
 ## Modern Pollen Data
@@ -79,7 +81,8 @@ fossil_sites <- read_excel('china pollen data/China west fossil pollen - data.xl
   mutate(lon = if_else(site == 'CAOTANH', Lat, Long),
          lat = if_else(site == 'CAOTANH', Long, Lat)) %>%
   select(-Long, -Lat) %>%
-    st_as_sf(coords = c(4,5), crs = 4326)
+  filter(site != 'PEARL14') %>%
+  st_as_sf(coords = c(4,5), crs = 4326)
 
 # these are different from the associated raw data -- specifically lacking that "transect"
 fossil_sites1 <- read_excel('china pollen data/China west fossil pollen - info.xlsx', skip = 1) %>%
@@ -104,6 +107,7 @@ fossil_sites2 <- read_excel('~/Downloads/China west fossil pollen - data from si
   # the CAOTANH site has lat and long coordinates reversed
   mutate(lon = if_else(site == 'CaotanH', Lat, Long),
          lat = if_else(site == 'CaotanH', Long, Lat)) %>%
+  filter(site != 'Pearl14') %>%
   select(-Long, -Lat) %>%
   st_as_sf(coords = c(4,5), crs = 4326)
 ```
@@ -114,6 +118,7 @@ ggplot(china)  +
   geom_sf(data = fossil_sites, color = 'red', size = 2) +
   geom_sf(data = fossil_sites1, color = 'green')
 ```
+
 
 ```{r}
 ## these are the same sites, the former has the data. not all sites in the original file are in the pollen file from jade
@@ -132,6 +137,7 @@ ggplot(china)  +
 ```{r}
 fossil_pollen <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
   slice(-(1:2)) %>%
+  filter(!str_detect(`Site/Taxa`, 'PEARL')) %>% # the "transect"
   column_to_rownames("Site/Taxa") %>%
   select(-(Long:Age)) %>%
   mutate(across(everything(), as.numeric))
@@ -139,7 +145,8 @@ fossil_pollen <- read_excel('china pollen data/China west fossil pollen - data.x
 # new fossil pollen data has some duplicated sample names with different values
 fossil_pollen2 <- read_excel('~/Downloads/China west fossil pollen - data from sites.xlsx') %>%
   slice(-n()) %>% # the last row of this file are column sums, so drop it
-  filter(Site != 'NAQ22_-010') %>% # the percentages from this sample only add to 5
+  filter(Site != 'NAQ22_-010', # the percentages from this sample only add to 5
+         !str_detect(Site, 'Pearl')) %>% # the 'transect' 
   select(-Pinus_haploxylon) %>% # this taxon appears twice (with upper and lowercase H), delete this column as the total is much smaller
   select(-(Site:Age))
 
@@ -428,75 +435,102 @@ screeplot(mat_gdd0);screeplot(mat_gdd5);screeplot(mat_gdd10)
 ```
 
 ```{r}
-plot(mat_gdd0);plot(mat_gdd5);plot(mat_gdd10)
+plot(mat_gdd0, k = 3, wMean = TRUE);plot(mat_gdd5,k = 3, wMean = TRUE);plot(mat_gdd10,k = 3, wMean = TRUE)
 ```
 
 
 
 # Past Climate
 
-```{r}
-pastgdd <- predict(gdd_mat, dat$fossil_pollen / 100, k = 4)
-
-fossil_loc2 <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
-  slice(-(1:2)) %>%
-  select(`Site/Taxa`:Age)
-
-recon <- as_tibble(pastgdd$fit, rownames = 'Site/Taxa') %>%
-  left_join(fossil_loc2) %>%
-  separate(`Site/Taxa`, into = c('site', 'year'), sep = '_', extra = 'merge') %>%
-  # this part required because there are sometimes extra '_'  in the site names
-  separate(year, into = c('year1', 'year2'), sep = '_') %>% # this warning is ok
-  mutate(site = if_else(is.na(year2), site, paste(site, year1, sep = '_'))) %>%
-  select(-year1, -year2, -MAT) %>%
-  rename(gdd10 = MAT.wm) %>%
-  filter(Long > 60, Age < 12000)
-```
-```{r}
-recon %>% count(site)
-```
-```{r}
-plot(fossil)
-```
-
+Now reconstruct past climates at the fossil pollen sample sites.
 
 ```{r}
+elev <- raster::getData('alt', country = 'CHN')
 
-test <- bam(gdd10 ~ te(Long, Lat, Age, k = c(80, 20), d = c(2, 1), bs = c('tp', 'cr')), data = recon)
-
-summary(test)
-gam.check(test)
-plot(test)
-```
-
-```{r}
-recon;fossil
-```
-
-
-```{r}
-plot(test)
-```
-```{r}
-recon %>% filter(Age < 12000) %>% pull(Age) %>% hist
-```
-
-```{r}
-china_hex <- china %>% 
-  st_make_grid(n = 50, square = FALSE) %>% 
+tibet_hex <- tibet %>%
+  st_make_grid(n = 100, square = FALSE) %>% 
   st_as_sf() %>% 
-  mutate(Long = st_coordinates(st_centroid(.))[,1],
-         Lat = st_coordinates(st_centroid(.))[,2]) %>%
-    filter(st_intersects(x, china, sparse = FALSE)) %>%
-  mutate(id = 1:n())
-   
-map_dfr(c(0, 2000, 4000, 6000), ~ mutate(china_hex, Age = .)) %>%
-    mutate(pred = predict(test, ., type = 'response')) %>%
+  rename(geometry = x) %>%
+  mutate(x = st_coordinates(st_centroid(.))[,1],
+         y = st_coordinates(st_centroid(.))[,2]) %>%
+  filter(st_within(geometry, tibet, sparse = FALSE)) %>%
+  mutate(id = 1:n(),
+         Alt = exact_extract(elev, ., 'mean'))
+```
+
+
+```{r}
+ggplot() +
+  geom_sf(data = tibet) +
+  geom_sf(data = filter(fossil_sites, 
+                        st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), size = 2) +
+  geom_sf(data = filter(fossil_sites3, 
+                        st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), color = 'green') 
+```
+
+
+```{r}
+pastgdd0 <- predict(mat_gdd0, dat$fossil_pollen / 100, k = 3)
+pastgdd5 <- predict(mat_gdd5, dat$fossil_pollen / 100, k = 3)
+pastgdd10 <- predict(mat_gdd10, dat$fossil_pollen / 100, k = 3)
+
+tibet_recon <- fossil_sites %>%
+  mutate(gdd0 = pastgdd0$fit[,2],
+         gdd5 = pastgdd5$fit[,2],
+         gdd10 = pastgdd10$fit[,2],
+         x = st_coordinates(geometry)[,1],
+         y = st_coordinates(geometry)[,2]) %>%
+  filter(Age <= 7000) %>%
+  filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)) %>% # only get sites within 100km of the plateau
+  st_drop_geometry() %>%
+  as_tibble()
+```
+
+
+```{r}
+
+test <- bam(gdd0 ~ te(x, y, Age, d = c(2, 1), bs = c('tp', 'cr')), data = tibet_recon)
+test2 <- bam(gdd0 ~ te(x, y, Age, d = c(2, 1), bs = c('tp', 'cr')) + s(Alt, k = 5, bs = 'cr'), data = tibet_recon)
+test3 <- bam(gdd0 ~ te(x, y, Age, k = c(50, 20), d = c(2, 1), bs = c('tp', 'cr')), data = tibet_recon)
+test4 <- bam(gdd0 ~ te(x, y, Age, k = c(50, 20), d = c(2, 1), bs = c('tp', 'cr')) + s(Alt, k = 5, bs = 'cr'), data = tibet_recon)
+
+#
+
+summary(test);summary(test2);summary(test3);summary(test4)
+gam.check(test)
+plot(test);plot(test2);plot(test3);plot(test4)
+```
+
+
+
+```{r}
+map_dfr(c(0, 6000), ~ mutate(tibet_hex, Age = .)) %>%
+    mutate(pred = predict(test4, ., type = 'response')) %>%
   mutate(pred = if_else(pred < 0, 0, pred)) %>%
-  ggplot() + geom_sf(aes(fill = pred) ,size = .1) + scale_fill_viridis_c(option = 'magma') +
-    facet_wrap(~Age) +
+  ggplot() + 
+  geom_sf(aes(fill = pred) ,size = .1) + 
+  scale_fill_viridis_c(option = 'magma', limits = c(0, 4000)) +
+  facet_wrap(~Age) + 
+  geom_sf(data = tibet, fill = NA) +
+  geom_sf(data = fossil_sites %>% filter(Age <= 9000) %>% group_by(site) %>% slice_sample(n = 1) %>% select(-Age) %>% ungroup %>%
+  filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), alpha = .5) +
   theme_bw() 
 ```
+```{r}
+tibet_hex %>% transmute(gdd0 = exact_extract(as(clim['GDD0'], 'Raster'), ., 'mean')) %>% ggplot() + geom_sf(aes(fill = gdd0), size = .1) + scale_fill_viridis_c(option = 'magma') + theme_bw()
+```
+```{r}
+tibet_hex %>% mutate(Age = -50) %>%
+  mutate(gdd0 = exact_extract(as(clim['GDD0'], 'Raster'), ., 'mean'),
+  pred = predict(test4, ., type = 'response'),
+  pred = if_else(pred < 0, 0, pred)) %>%
+  ggplot(aes(gdd0, pred)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw()
+```
+
+
 
 ```{r}
 mutate(china_hex, Age = 0) %>%
@@ -526,10 +560,10 @@ mutate(china_hex, Age = 3500) %>%
 ```
 
 ```{r}
-map_dfr(seq(12000, 0, -1000), ~ mutate(china_hex, Age = .)) %>%
-    mutate(pred = predict(test, ., type = 'response')) %>%
+map_dfr(seq(7000, 0, -1000), ~ mutate(tibet_hex, Age = .)) %>%
+    mutate(pred = predict(test4, ., type = 'response')) %>%
   mutate(pred = if_else(pred < 0, 0, pred)) %>%
-  ggplot() + geom_sf(aes(fill = pred > 2900) ,size = .1) + scale_fill_viridis_d(option = 'magma') +
+  ggplot() + geom_sf(aes(fill = pred > 1907) ,size = .1) + scale_fill_viridis_d(option = 'magma') +
     facet_wrap(~Age) +
   theme_bw() 
 ```
@@ -537,7 +571,7 @@ map_dfr(seq(12000, 0, -1000), ~ mutate(china_hex, Age = .)) %>%
 ## Bins
 ```{r}
 library(exactextractr)
-gdd_dgg <- exact_extract(as(clim['GDD10'], 'Raster'), china_hex, 'mean')
+gdd_dgg <- exact_extract(as(clim['GDD0'], 'Raster'), tibet_hex, 'mean')
 
 china_hex %>% transmute(gdd_dgg) %>% ggplot() + geom_sf(aes(fill = gdd_dgg), size = .1) + scale_fill_viridis_c(option = 'magma') + theme_bw()
 ```
@@ -772,20 +806,21 @@ screeplot(gdd0_pcr);screeplot(gdd5_pcr);screeplot(gdd10_pcr)
 ```
 
 ```{r}
-gdd0_wapls <- rioja::WAPLS(dat$modern_pollen / 100, as_tibble(pts)$GDD0, 
-                           npls = 10, 
+gdd10_wapls <- rioja::WAPLS(sqrt(dat$modern_pollen / 100), as_tibble(pts)$GDD10, 
+                           npls = 10,
                            standx = FALSE) %>% 
-  crossval(gdd0_wapls, cv.method = 'lgo', ngroups = 5)
-
-screeplot(gdd0_wapls)
-plot(gdd0_wapls)
+  crossval(cv.method = 'lgo', ngroups = 5)
+summary(gdd10_wapls)
+screeplot(gdd10_wapls)
+plot(gdd10_wapls, npls = 4)
 ```
 
 
 ```{r}
-gdd_wa <- rioja::WA(dat$modern_pollen / 100, as_tibble(pts)$GDD10) %>%
+gdd10_wa <- rioja::WA(dat$modern_pollen / 100, as_tibble(pts)$GDD10) %>%
   crossval(cv.method = 'lgo', ngroups = 5)
-plot(gdd_wa)
+
+plot(gdd10_wa)
 ```
 
 ```{r}
@@ -798,6 +833,18 @@ plot(gdd_mlrc)
 gdd_LWR <- rioja::LWR(dat$modern_pollen / 100, as_tibble(pts)$GDD10) %>%
   crossval(cv.method = 'lgo', ngroups = 5)
 plot(gdd_LWR)
+
+length(gdd_LWR$x)
+plot(gdd_LWR$x, gdd_LWR$predicted[,1])
+```
+```{r}
+gdd_LWR_sqrt <- rioja::LWR(sqrt(dat$modern_pollen / 100), as_tibble(pts)$GDD10) %>%
+  crossval(cv.method = 'lgo', ngroups = 5)
+summary(gdd_LWR_sqrt);summary(gdd_LWR)
+
+plot(gdd_LWR$x, gdd_LWR$predicted[,1])
+plot(gdd_LWR_sqrt$x, gdd_LWR_sqrt$predicted[,1])
+
 ```
 
 ```{r}
@@ -807,3 +854,15 @@ gdd_IKFA <- rioja::IKFA(dat$modern_pollen / 100, as_tibble(pts)$GDD10, nFact = 1
 screeplot(gdd_IKFA)
 plot(gdd_IKFA)
 ```
+#  china recon
+```{r}
+china_hex <- china %>% 
+  st_make_grid(n = 50, square = FALSE) %>% 
+  st_as_sf() %>% 
+  rename(geometry = x) %>%
+  mutate(x = st_coordinates(st_centroid(.))[,1],
+         y = st_coordinates(st_centroid(.))[,2]) %>%
+  filter(st_intersects(geometry, china, sparse = FALSE)) %>%
+  mutate(id = 1:n())
+```
+
