@@ -305,6 +305,12 @@ ggplot() +
 ## Modern Climate
 
 ```{r}
+
+read_stars('/vsigzip//Users/nick/Downloads/CMFD/temp_CMFD_V0106_B-01_01dy_010deg_197901-197912.nc.gz')
+```
+
+
+```{r}
 ref <- st_bbox(pc_scores) %>%
   st_as_stars(dx = 0.1)
 
@@ -486,6 +492,7 @@ tibet_recon <- fossil_sites %>%
   as_tibble()
 ```
 
+## Interpolation
 
 ```{r}
 
@@ -497,10 +504,25 @@ test4 <- bam(gdd0 ~ te(x, y, Age, k = c(50, 20), d = c(2, 1), bs = c('tp', 'cr')
 #
 
 summary(test);summary(test2);summary(test3);summary(test4)
-gam.check(test)
+gam.check(test2)
 plot(test);plot(test2);plot(test3);plot(test4)
 ```
 
+```{r}
+library(fields)
+test_tps <- Tps(tibet_recon[,c(7,8,2,3)], tibet_recon$gdd0)
+plot(test_tps)
+summary(test_tps)
+```
+```{r}
+test_tps2 <- Tps(tibet_recon[,c(7,8,3)], tibet_recon$gdd0, Z = tibet_recon$Alt)
+plot(test_tps2)
+summary(test_tps)
+```
+```{r}
+test_tps3 <- Tps(tibet_recon[,c(7,8,3)], tibet_recon$gdd0)
+plot(test_tps3)
+```
 
 
 ```{r}
@@ -516,15 +538,83 @@ map_dfr(c(0, 6000), ~ mutate(tibet_hex, Age = .)) %>%
   filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), alpha = .5) +
   theme_bw() 
 ```
+
+```{r}
+new_prd <- map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
+    as_tibble %>%
+  select(x,y,Alt, Age) %>%
+remove_missing() %>%
+      mutate(pred = predict(test_tps,x = .)) %>%
+  mutate(pred = if_else(pred < 0, 0, pred))
+map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
+  remove_missing() %>%
+  mutate(pred = new_prd$pred) %>%
+  ggplot() + 
+  geom_sf(aes(fill = pred) ,size = .1) + 
+  scale_fill_viridis_c(option = 'magma') +
+  facet_wrap(~Age) + 
+  geom_sf(data = tibet, fill = NA) +
+  geom_sf(data = fossil_sites %>% filter(Age <= 9000) %>% group_by(site) %>% slice_sample(n = 1) %>% select(-Age) %>% ungroup %>%
+  filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), alpha = .5) +
+  theme_bw() 
+```
+```{r}
+new_prd2 <- map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
+    as_tibble %>%
+  select(x,y,Alt, Age) %>%
+remove_missing() %>%
+      mutate(pred = predict(test_tps2,x = .[,c(1,2,4)], Z = .$Alt)) %>%
+  mutate(pred = if_else(pred < 0, 0, pred))
+map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
+  remove_missing() %>%
+  mutate(pred = new_prd2$pred) %>%
+  ggplot() + 
+  geom_sf(aes(fill = pred) ,size = .1) + 
+  scale_fill_viridis_c(option = 'magma') +
+  facet_wrap(~Age) + 
+  geom_sf(data = tibet, fill = NA) +
+  geom_sf(data = fossil_sites %>% filter(Age <= 9000) %>% group_by(site) %>% slice_sample(n = 1) %>% select(-Age) %>% ungroup %>%
+  filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), alpha = .5) +
+  theme_bw() 
+```
+```{r}
+new_prd3 <- map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
+    as_tibble %>%
+  select(x,y,Alt, Age) %>%
+remove_missing() %>%
+      mutate(pred = predict(test_tps3,x = .[,c(1,2,4)])) %>%
+  mutate(pred = if_else(pred < 0, 0, pred))
+map_dfr(c(0), ~ mutate(tibet_hex, Age = .)) %>%
+  remove_missing() %>%
+  mutate(pred = new_prd3$pred) %>%
+  ggplot() + 
+  geom_sf(aes(fill = pred) ,size = .1) + 
+  scale_fill_viridis_c(option = 'magma') +
+  facet_wrap(~Age) + 
+  geom_sf(data = tibet, fill = NA) +
+  geom_sf(data = fossil_sites %>% filter(Age <= 9000) %>% group_by(site) %>% slice_sample(n = 1) %>% select(-Age) %>% ungroup %>%
+  filter(st_is_within_distance(geometry, tibet, dist = 400000, sparse = FALSE)), alpha = .5) +
+  theme_bw() 
+```
+
 ```{r}
 tibet_hex %>% transmute(gdd0 = exact_extract(as(clim['GDD0'], 'Raster'), ., 'mean')) %>% ggplot() + geom_sf(aes(fill = gdd0), size = .1) + scale_fill_viridis_c(option = 'magma') + theme_bw()
 ```
+The base gam doesn't to a great job of interpolating
 ```{r}
 tibet_hex %>% mutate(Age = -50) %>%
   mutate(gdd0 = exact_extract(as(clim['GDD0'], 'Raster'), ., 'mean'),
   pred = predict(test4, ., type = 'response'),
   pred = if_else(pred < 0, 0, pred)) %>%
   ggplot(aes(gdd0, pred)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw()
+```
+```{r}
+tibet_hex %>%
+  mutate(gdd0 = exact_extract(as(clim['GDD0'], 'Raster'), ., 'mean')) %>%
+  ggplot(aes(Alt, gdd0)) +
   geom_point() +
   geom_smooth() +
   theme_bw()
