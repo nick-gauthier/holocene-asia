@@ -16,6 +16,8 @@ library(rioja)
 library(mgcv)
 library(exactextractr)
 library(fields)
+library(fastICA)
+
 
 china <- rnaturalearth::ne_countries(country = 'China', returnclass = 'sf')
 tibet <- read_sf('~/Downloads/DBATP/DBATP_Polygon.shp') # source http://www.geodoi.ac.cn/weben/doi.aspx?Id=135
@@ -193,15 +195,11 @@ Do a PCA on the modern pollen data to look at large scale pollen-climate relatio
 ```{r}
 pca <- prcomp(modern_pollen, scale. = FALSE)
 pca_s <- prcomp(sqrt(modern_pollen), scale. = FALSE) # sqrt is hellinger transformation
-```
-
-```{r}
-library(fastICA)
 ica <- fastICA(modern_pollen, 9)
 ```
 
 ```{r}
-screeplot(pca, npcs = 20)
+screeplot(pca,type = 'lines', npcs = 20)
 screeplot(pca_s, type = 'lines', npcs = 20)
 ```
 So PC1 is arboreal/non-arboreal. PC2 separates out sedges, grow along bodies of water, major grassland biomes
@@ -211,15 +209,11 @@ pca$rotation[,1, drop = FALSE] %>% as.data.frame %>% filter(PC1 > .2 | PC1 < -.2
 pca$rotation[,2, drop = FALSE] %>% as.data.frame %>% filter(PC2 > .2 | PC2 < -.2)
 ```
 ```{r}
-t(ica$A) %>% set
-t(ica$A)[,1:2] %>% plot
-t(ica$A)[,4:5] %>% plot
-
-t(ica$A)[,1, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% filter(V1 < -10)
-t(ica$A)[,2, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% filter(V1 > 10)
-t(ica$A)[,3, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% filter(V1 > 10)
-t(ica$A)[,4, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% filter(V1 > 10)
-t(ica$A)[,5, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% filter(V1 < -10)
+t(ica$A)[,1, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% arrange(-abs(V1)) %>% slice_head(n = 5)
+t(ica$A)[,2, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen))%>% arrange(-abs(V1)) %>% slice_head(n = 5)
+t(ica$A)[,3, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen))%>% arrange(-abs(V1)) %>% slice_head(n = 5)
+t(ica$A)[,4, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% arrange(-abs(V1)) %>% slice_head(n = 5)
+t(ica$A)[,5, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen))%>% arrange(-abs(V1)) %>% slice_head(n = 5)
 ```
 
 Same patterns with the hellinger transformation
@@ -436,6 +430,21 @@ modern_sites %>%
   mutate(gdd0_resid = mat_gdd0$residuals.cv[,'N03.wm'],
          gdd5_resid = mat_gdd5$residuals.cv[,'N03.wm']) %>%
   filter(gdd0_resid > 8000)
+```
+
+## Taxon importance
+
+```{r}
+library(doMC)
+registerDoMC(cores = 4)
+vimp <- randomPTF(dat$modern_pollen[,-298] / 100, as_tibble(pts)$gdd0 , fun=WAPLS, npls = 2, 
+                   standx = FALSE,ncol = 2, do.parallel=TRUE, nTF = 10000)
+
+rownames_to_column(vimp$VI, var = 'taxa') %>%
+  slice_head(n = 20) %>%
+ggplot( aes(reorder(taxa, VI), VI)) +
+  geom_col() +
+  coord_flip()
 ```
 
 
