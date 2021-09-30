@@ -1,0 +1,50 @@
+---
+title: "japan map"
+author: "Nick Gauthier"
+date: "9/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+countries <- rnaturalearth::ne_countries(country = c('Japan', 'South Korea', 'North Korea'), returnclass = 'sf', scale = 'medium')
+plot(countries)
+```
+```{r}
+gdd <- read_stars('~/Desktop/CHELSA_gdd10_1981-2010_V.2.1.tif') %>%
+  st_crop(countries) %>%
+  setNames('GDD10')
+```
+
+```{r}
+ggplot() +
+  geom_stars(data = gdd) +
+  scale_fill_viridis_c(option = 'magma', na.value = NA) +
+  geom_sf(data = countries, fill = NA) +
+  coord_sf(ylim = c(30, 45)) +
+  theme_bw()
+```
+```{r}
+gdd_class <- gdd %>% 
+  transmute(niche = case_when(GDD10 > 3300 ~ 'Tropical Japonica (130 day)',
+                              GDD10 > 3000 ~ 'Temperate Japonica (150 day) and Indica (120 day)',
+                              GDD10 > 2900 ~ 'Tropical Japonica (120 day)',
+                              GDD10 > 2500 ~ 'Temperate Japonica (130 day)',
+                              GDD10 > 2400 ~ 'Indica (110 day)',
+                              !is.na(GDD10) ~ 'None') %>%
+              factor(levels = c('None', 'Indica (110 day)', 
+                                'Temperate Japonica (130 day)', 
+                                'Tropical Japonica (120 day)', 
+                                'Indica (120 day) or Temperate Japonica (150 day)', 
+                                'Tropical Japonica (130 day)'))) 
+```
+
+```{r}
+ggplot() +
+  geom_stars(data = gdd_class) +
+  scale_fill_brewer(palette = 'Spectral', direction = -1, na.value = NA) +
+  geom_sf(data = countries, fill = NA) +
+  coord_sf(ylim = c(30, 45)) +
+  theme_bw()
+```
