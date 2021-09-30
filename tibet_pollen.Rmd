@@ -194,6 +194,7 @@ Do a PCA on the modern pollen data to look at large scale pollen-climate relatio
 pca <- prcomp(modern_pollen, scale. = FALSE)
 pca_s <- prcomp(sqrt(modern_pollen), scale. = FALSE) # sqrt is hellinger transformation
 ```
+
 ```{r}
 library(fastICA)
 ica <- fastICA(modern_pollen, 9)
@@ -219,8 +220,6 @@ t(ica$A)[,2, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %
 t(ica$A)[,3, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% filter(V1 > 10)
 t(ica$A)[,4, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% filter(V1 > 10)
 t(ica$A)[,5, drop = FALSE] %>% as.data.frame(row.names = names(modern_pollen)) %>% filter(V1 < -10)
-
-
 ```
 
 Same patterns with the hellinger transformation
@@ -363,7 +362,7 @@ ggplot() +
 pts <- st_extract(st_apply(cmfd, 1:2, mean), at = modern_sites)
 ```
 
-## Modern Analogues
+## Transfer functions
 
 ```{r}
 dat <- Merge(modern_pollen, fossil_pollen, join = 'inner', split = TRUE)
@@ -375,13 +374,40 @@ mat_gdd0 <- MAT(dat$modern_pollen / 100, as_tibble(pts)$gdd0 , lean = FALSE) %>%
   crossval(cv.method = 'lgo', ngroups = 5)
 mat_gdd5 <- MAT(dat$modern_pollen / 100, as_tibble(pts)$gdd5, lean = FALSE) %>%
   crossval(cv.method = 'lgo', ngroups = 5)
+```
 
+```{r}
 screeplot(mat_gdd0);screeplot(mat_gdd5)
 ```
 
 ```{r}
 plot(mat_gdd0, k = 3, wMean = TRUE);plot(mat_gdd5,k = 3, wMean = TRUE)
 ```
+
+```{r}
+dist_mat <- st_distance(pts)
+
+mat_gdd0_hblock <- MAT(dat$modern_pollen[,-298] / 100, as_tibble(pts)$gdd0 , lean = FALSE) %>%
+  crossval(cv.method = 'h-block', h.cutoff = units::set_units(100000, m), h.dist = dist_mat)
+
+gdd_wapls <- WAPLS(sqrt(dat$modern_pollen[,-298] / 100),as_tibble(pts)$gdd0, npls = 10, 
+                   standx = FALSE) %>% 
+  crossval(cv.method = 'h-block', h.cutoff = units::set_units(200000, m), h.dist = dist_mat)
+```
+
+
+```{r}
+screeplot(mat_gdd0_hblock)
+screeplot(gdd_wapls)
+```
+
+```{r}
+plot(gdd_wapls, npls = 2)
+plot(mat_gdd0_hblock, k = 3, wMean = TRUE)
+```
+
+
+## Analyzing residuals
 
 ```{r}
 modern_sites %>%
@@ -412,19 +438,6 @@ modern_sites %>%
   filter(gdd0_resid > 8000)
 ```
 
-H-block cross validation
-
-```{r}
-dist_mat <- st_distance(pts)
-
-mat_gdd0_hblock <- MAT(dat$modern_pollen / 100, as_tibble(pts)$gdd0 , lean = FALSE) %>%
-  crossval(cv.method = 'h-block', h.cutoff = units::set_units(100000, m), h.dist = dist_mat)
-mat_gdd5 <- MAT(dat$modern_pollen / 100, as_tibble(pts)$gdd5, lean = FALSE) %>%
-  crossval(cv.method = 'lgo', ngroups = 5)
-
-screeplot(mat_gdd0);screeplot(mat_gdd0_hblock)
-
-```
 
 # Past Climate
 
@@ -544,38 +557,4 @@ map_dfr(seq(7000, 0, -1000), ~ mutate(tibet_hex, Age = .)) %>%
 ```
 
 ## Niche shifts
-
-# Other Methods
-
-Comparison of other pollen reconstruction methods.
-
-```{r}
-gdd_wapls <- WAPLS(sqrt(dat$modern_pollen[,-298] / 100), as_tibble(pts)$gdd0, 
-                           npls = 10,
-                           standx = FALSE) %>% 
-  crossval(cv.method = 'h-block', h.cutoff = units::set_units(200000, m), h.dist = dist_mat)
-screeplot(gdd_wapls)
-plot(gdd_wapls, npls = 4)
-```
-
-```{r}
-gdd_LWR <- rioja::LWR(sqrt(dat$modern_pollen / 100), as_tibble(pts)$gdd0) %>%
-  crossval(cv.method = 'lgo', ngroups = 5)
-plot(gdd_LWR)
-
-length(gdd_LWR$x)
-plot(gdd_LWR$x, gdd_LWR$predicted[,1])
-
-colSums(dat$modern_pollen)
-```
-
-```{r}
-gdd_IKFA <- rioja::IKFA(dat$modern_pollen[,-298] / 100, as_tibble(pts)$gdd0, nFact = 15) %>%
-  crossval(cv.method = 'h-block', h.cutoff = units::set_units(200000, m), h.dist = dist_mat)
-
-screeplot(gdd_IKFA)
-plot(gdd_IKFA, nFact)
-
-gdd_IKFA$ccoef
-```
 
