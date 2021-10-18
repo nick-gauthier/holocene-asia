@@ -1,0 +1,547 @@
+---
+title: "Pollen reconstruction of growing degree days over Tibet"
+output: html_notebook
+---
+
+# Setup and Preproccesing
+
+Import the packages needed for this analysis.
+```{r setup, warning = FALSE, message=FALSE}
+# Load packages
+library(tidyverse)
+library(readxl)
+library(sf)
+library(scico)
+library(stars)
+library(rioja)
+library(mgcv)
+library(fields)
+```
+
+Load shapefiles of China and the Tibetan Plateau to use in plots.
+```{r}
+# Shapefiles for plotting and analysis
+# China shapefile
+china <- rnaturalearth::ne_countries(country = 'China', returnclass = 'sf') 
+# Tibet shapefile, source http://www.geodoi.ac.cn/weben/doi.aspx?Id=135
+tibet <- read_sf('~/Downloads/DBATP/DBATP_Polygon.shp')
+# Bounding box for greater Tibetan Platea/west China
+tibet_bbox <- st_bbox(c(xmin = 73, ymin = 25.5, xmax = 105, ymax = 42.5), crs = 4326)
+```
+
+# Present-day Growing Degree Days
+
+Import and preprocess daily temperature data from the Chinese Meteorological Forcing Dataset (CMFD). Use the daily values to calculate growing degree days.
+
+```{r, eval = FALSE}
+cmfd <- list.files('~/Downloads/CMFD', full.names = TRUE) %>% map(~read_ncdf(., eps = 0.001, var = 'temp') %>%
+  mutate(temp = units::set_units(temp, degree_C) %>% units::drop_units()) %>%
+  transmute(gdd0 = if_else(temp > 0, temp, 0) - 0,
+            gdd5 = if_else(temp > 5.5, temp, 5.5) - 5.5) %>%
+  st_apply(1:2, sum) %>%
+  merge()) %>%
+  do.call(c, .)%>%
+  merge(name = 'time') %>%
+  st_set_dimensions('time', values = 1979:2018) %>%
+  split('attributes')
+```
+
+```{r include=FALSE, eval = FALSE}
+# The code chunk requires an external download, so the results are saved and loaded by default instead
+gc()
+saveRDS(cmfd, 'cmfd.rds')
+```
+
+```{r, include = FALSE}
+#load precomputed cmfd rasters
+cmfd <- readRDS('cmfd.rds')
+```
+
+Map the average growing degree days above 0 and 5.5 degrees.
+```{r echo=FALSE, warning = FALSE}
+ggplot() +
+  geom_stars(data = st_apply(cmfd['gdd0'], 1:2, mean)) +
+  scale_fill_viridis_c(option = 'magma', na.value = NA, name = 'GDD0') +
+  theme_bw()
+
+ggplot() +
+  geom_stars(data = st_apply(cmfd['gdd5'], 1:2, mean)) +
+  scale_fill_viridis_c(option = 'magma', na.value = NA, name = 'GDD5.5') +
+  theme_bw()
+```
+
+Map the present day probability of being in the temperature niche for different crop types during the 39-year observational record, using a fixed GDD threshold requirement for growth.
+```{r, echo=FALSE, warning = FALSE}
+ggplot() +
+  geom_stars(data = st_apply(cmfd['gdd0'] > 1907, 1:2, sum) / 40 * 100) +
+  scale_fill_viridis_c(option = 'magma', na.value = NA, name = "% years in niche") +
+  theme_bw() +
+  ggtitle('Winter wheat niche')
+
+ggplot() +
+  geom_stars(data = st_apply(cmfd['gdd5'] > 2082, 1:2, sum) / 40 * 100) +
+  scale_fill_viridis_c(option = 'magma', na.value = NA, name = "% years in niche") +
+  theme_bw() +
+  ggtitle('Broomcorn millet niche')
+```
+
+# Modern Pollen Data
+
+Import and preprocess the modern pollen data and site metadata to calibrate the growing degree day transfer functions.
+
+```{r}
+# import the modern site data
+modern_sites <- read_excel('china pollen data/China modern pollen - info.xlsx', 
+                           sheet = 2, skip = 1) %>%
+  st_as_sf(coords = c(4,5), crs = 4326) %>%
+  select(id = No., 
+         site = `Site name`, 
+         elev = `Elevation (m)`, 
+         sample_type = `Sample type`, 
+         source = `Data source`, 
+         data_type = `Data type`, 
+         modern_veg_map = `Modern vegetation information (the Vegetation Map of China)`, 
+         modern_veg_samp = `Modern vegetation information (sample and its surroundings)`, 
+         pot_veg = `Potential vegetation (for cultivated vegetation, aquatic vegetation and other cryptic vegetation)`)
+
+# import the modern pollen data
+modern_pollen <- read_excel('china pollen data/China modern pollen - data.xlsx', 
+                            sheet = 2, skip = 1) %>%
+  slice(-(1:2)) %>%
+  select(-(Site:`Elevation (m)`)) %>%
+  column_to_rownames(var = 'No.') %>%
+  mutate(across(everything(), as.numeric))
+```
+
+Visualize the site metadata.
+```{r echo=FALSE}
+ggplot(modern_sites) +
+  geom_sf(data = china) +
+  geom_sf(aes(color = sample_type)) +
+  theme_bw()
+count(modern_sites, sample_type) %>%
+ggplot(aes(reorder(sample_type, n), n)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  labs(title = 'Modern pollen sample distribution', y = 'Count', x = 'Sample type')
+```
+
+Do some quick exploratory analysis of the modern pollen abundances using principal components analysis.
+```{r}
+pca <- prcomp(modern_pollen, scale. = FALSE)
+```
+
+Visualize the results. It looks like the modern assemblages are well described by a few leading patterns, mainly arboreal vs non-arboreal pollen and sedge vegetation.
+```{r echo=FALSE, warning = FALSE}
+pc_scores <- pca$x %>% 
+  as_tibble() %>%
+  bind_cols(modern_sites, .) %>%
+  select(PC1:PC9) %>%
+  st_set_crs(4326)
+pc_scores %>%
+  as_tibble() %>%
+  pivot_longer(PC1:PC9) %>%
+  arrange(abs(value)) %>%
+  st_as_sf() %>%
+ggplot() +
+  geom_sf(aes(color = value)) + 
+  facet_wrap(~name) +
+  geom_sf(data = china %>% select(-name), fill= NA) +
+  scale_color_distiller(palette = 'RdBu', limits = c(-88, 88), direction = -1) +
+  theme_bw()
+
+ggplot() +
+    geom_sf(data= china) +
+  geom_sf(data = pc_scores, aes(color = PC1)) + 
+  scale_color_scico(palette = 'bamako', limits = c(-70, 70), direction = -1) +
+  theme_bw() +
+  ggtitle('Modern Arboreal/Non-Arboreal Pollen concentration')
+
+ggplot() +
+    geom_sf(data= china) +
+  geom_sf(data = pc_scores, aes(color = PC2)) + 
+  scale_color_scico(palette = 'bamako', limits = c(-80, 80), direction = 1) +
+  theme_bw() +
+  ggtitle('Modern Sedge/Non-Sedge Pollen concentration')
+```
+
+# Calibrating Transfer Functions
+
+Now calibrate the transfer functions to estimate growing degree days from the modern pollen assemblages. First we have to preprocess the data to remove sites that fall beyond our climate data and remove taxa that aren't also in our fossil pollen data. To do the latter we also have to load the fossil pollen data.
+
+Remove sites that fall outside the CMFD boundaries.
+
+```{r echo= FALSE, message = FALSE, warning = FALSE}
+all_pts <- st_extract(st_apply(cmfd, 1:2, mean), at = modern_sites)
+outside_ids <- all_pts %>%
+  st_drop_geometry() %>%
+  bind_cols(modern_sites) %>%
+  filter(is.na(gdd0)) %>%
+  pull(id)
+pts <- st_extract(st_apply(cmfd, 1:2, mean), at = modern_sites[-outside_ids,])
+
+ggplot() +
+  geom_stars(data = cmfd[1,,,1]) +
+  geom_sf(data = all_pts, aes(color = is.na(gdd0))) +
+  scale_color_viridis_d()
+```
+
+Import the fossil pollen data to limit the transfer functions to taxa that are in both samples.
+
+```{r}
+fossil_pollen <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
+  slice(-(1:2)) %>%
+  # remove the Pearl River transect and Yanghu Lake
+  filter(!str_detect(`Site/Taxa`, 'PEARL'),
+         !str_detect(`Site/Taxa`, 'YANGHU')) %>% 
+  column_to_rownames("Site/Taxa") %>%
+  select(-(Long:Age)) %>%
+  mutate(across(everything(), as.numeric))
+```
+
+Create a merged dataset.
+
+```{r}
+dat <- Merge(modern_pollen[-outside_ids,], fossil_pollen, join = 'inner', split = TRUE)
+```
+
+Now fit the transfer functions. We'll use two methods: the Modern Analogue Technique (MAT) and Weighted Average-Partial Least Squares (WAPLS). Fit these models to both GDD0 and GDD5.5. We use H-block cross validation to check the performance of these models, attempting to predict the GDD value each site using a model fit only on pollen samples from 100km or more away. This reduces the impact of spatial autocorrelation on the analysis, which might otherwise give us an over-optimistic assessment of how well these models perform.
+
+First create a distance matrix for all the sample locations to use in the cross validation.
+```{r}
+dist_mat <- st_distance(pts)
+```
+
+Fit the models on the GDD0 data first.
+
+```{r warning = FALSE, cache = TRUE}
+mat_gdd0 <- MAT(dat$modern_pollen[,-298] / 100, 
+                       as_tibble(pts)$gdd0, 
+                       lean = FALSE) %>%
+  crossval(cv.method = 'h-block', 
+           h.cutoff = units::set_units(100000, m), 
+           h.dist = dist_mat,
+           verbose = FALSE)
+
+wapls_gdd0 <- WAPLS(sqrt(dat$modern_pollen[,-298] / 100),
+                    as_tibble(pts)$gdd0, npls = 10, 
+                    standx = FALSE) %>% 
+  crossval(cv.method = 'h-block', 
+           h.cutoff = units::set_units(100000, m), 
+           h.dist = dist_mat,
+           verbose = FALSE)
+```
+
+Compare the observed vs predicted values for the MAT method.
+```{r, echo = FALSE}
+plot(mat_gdd0, k = 3, wMean = TRUE)
+```
+
+And do the same for the WA-PLS method.
+```{r, echo=FALSE}
+plot(wapls_gdd0, npls = 2)
+```
+
+Then repeat for the GDD5.5 data (not shown).
+
+```{r, warning =FALSE, cache=TRUE, include=FALSE}
+mat_gdd5 <- MAT(dat$modern_pollen[,-298] / 100, 
+                       as_tibble(pts)$gdd5 , 
+                       lean = FALSE) %>%
+  crossval(cv.method = 'h-block', 
+           h.cutoff = units::set_units(100000, m), 
+           h.dist = dist_mat,
+           verbose = FALSE)
+
+wapls_gdd5 <- WAPLS(sqrt(dat$modern_pollen[,-298] / 100),
+                    as_tibble(pts)$gdd5, npls = 10, 
+                    standx = FALSE) %>% 
+  crossval(cv.method = 'h-block', 
+           h.cutoff = units::set_units(100000, m), 
+           h.dist = dist_mat, 
+           verbose = FALSE)
+```
+
+## Taxon Importance
+
+As a sanity check, look at the taxa that are most influential in the fitted models. Luckily, the leading taxa correspond quite well to those identified in the exploratory PCA analysis above.
+
+```{r, echo = FALSE, cache = TRUE}
+vimp <- randomPTF(dat$modern_pollen[,-298] / 100, as_tibble(pts)$gdd0 , fun=WAPLS, npls = 2, 
+                   standx = FALSE,ncol = 2, nTF = 5000, verbose = FALSE)
+
+rownames_to_column(vimp$VI, var = 'taxa') %>%
+  slice_head(n = 20) %>%
+ggplot( aes(reorder(taxa, VI), VI)) +
+  geom_col() +
+  coord_flip() +
+  labs(x = 'Importance', y = 'Taxon') +
+  theme_bw()
+```
+
+# Climate Reconstruction
+
+Now we'll use these models to predict GDD values over the Tibetan Plateau. 
+
+First we need to download some elevation data to use as the backdrop for the reconstructions.
+```{r warning = FALSE}
+# download 1km DEMs by country, patch together, and resample to 2.5km
+elev <- raster::mosaic(raster::getData('alt', country = 'CHN'),
+                       raster::getData('alt', country = 'IND'),
+                       raster::getData('alt', country = 'PAK'),
+                       raster::getData('alt', country = 'NPL'),
+                       raster::getData('alt', country = 'MMR'),
+                       raster::getData('alt', country = 'KAZ'),
+                       raster::getData('alt', country = 'BGD'),
+                       raster::getData('alt', country = 'BTN'),
+                       raster::getData('alt', country = 'UZB'),
+                       raster::getData('alt', country = 'TJK'),
+                       raster::getData('alt', country = 'KGZ'),
+                       raster::getData('alt', country = 'MNG'),
+                       raster::getData('alt', country = 'AFG'), 
+                       fun = 'mean') %>%
+  raster::aggregate(fact = 2.5) %>%
+  st_as_stars() %>%
+  setNames('elev')
+
+tibet_grid <- st_crop(elev, tibet_bbox) %>%
+  as_tibble()
+```
+
+```{r, echo=FALSE}
+ggplot() +
+  geom_stars(data = st_crop(elev, tibet_bbox)) +
+  geom_sf(data = tibet, fill = NA) +
+  scale_fill_viridis_c()
+```
+Import the fossil pollen site data, and clip to the region within 400km of the Plateau.
+
+```{r warning=FALSE}
+fossil_sites <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
+  slice(-(1:2)) %>%
+  select(`Site/Taxa`:Age) %>%
+  separate(`Site/Taxa`, into = c('site', 'year'), sep = '_', extra = 'merge') %>%
+  # this part required because there are sometimes extra '_'  in the site names
+  separate(year, into = c('year1', 'year2'), sep = '_') %>% # this warning is ok
+  mutate(site = if_else(is.na(year2), site, paste(site, year1, sep = '_'))) %>%
+  select(-year1, -year2) %>%
+  # the CAOTANH site has lat and long coordinates reversed
+  mutate(lon = if_else(site == 'CAOTANH', Lat, Long),
+         lat = if_else(site == 'CAOTANH', Long, Lat)) %>%
+  select(-Long, -Lat) %>%
+  filter(site != 'PEARL14', # mostly modern samples?
+         site != 'YANGHU') %>% # anomalous pollen assemblages
+  st_as_sf(coords = c(4,5), crs = 4326)
+```
+
+
+```{r, echo = FALSE}
+ggplot() +
+  geom_sf(data = st_as_sfc(tibet_bbox), fill = NA) +
+  geom_sf(data = tibet) +
+  geom_sf(data = filter(fossil_sites, 
+                        st_is_within_distance(geometry, st_as_sfc(tibet_bbox), dist = 500000, sparse = FALSE)), size = 1.2) +
+  theme_bw()
+```
+Predict GDD at each of these sites using both methods. Focus just on the last 7,000 years.
+```{r}
+pastgdd0 <- predict(mat_gdd0, dat$fossil_pollen / 100, k = 3)
+pastgdd5 <- predict(mat_gdd5, dat$fossil_pollen / 100, k = 3)
+pastgdd0_wapls <- predict(wapls_gdd0, dat$fossil_pollen / 100, npls = 2)
+pastgdd5_wapls <- predict(wapls_gdd5, dat$fossil_pollen / 100, npls = 2)
+
+tibet_recon <- fossil_sites %>%
+  mutate(gdd0 = pastgdd0$fit[,2],
+         gdd5 = pastgdd5$fit[,2],
+         gdd0_wapls = pastgdd0_wapls$fit[,2],
+         gdd5_wapls = pastgdd5_wapls$fit[,2],
+         x = st_coordinates(geometry)[,1],
+         y = st_coordinates(geometry)[,2],
+         # sample elevation at points (we could use the raw ALT field, but there are some mismatches. for now use DEM elevation for consistency)
+         elev = st_extract(elev, at = geometry)$elev) %>%
+  filter(Age <= 7000) %>%
+  filter(st_is_within_distance(geometry, st_as_sfc(tibet_bbox), dist = 500000, sparse = FALSE)) %>% # only get sites within 100km of the plateau
+  st_drop_geometry() %>%
+  as_tibble()
+```
+
+
+## Interpolation
+
+Now do a 4-dimensional (x, y, time, elevation) interpolation of the reconstructed climate using a thin-plate spline.
+
+```{r}
+gdd0_mat_tps <- Tps(tibet_recon[,c(8,9,10,3)], tibet_recon$gdd0) 
+gdd0_wapls_tps <- Tps(tibet_recon[,c(8,9,10,3)], tibet_recon$gdd0_wapls)
+gdd5_mat_tps <- Tps(tibet_recon[,c(8,9,10,3)], tibet_recon$gdd5)
+gdd5_wapls_tps <- Tps(tibet_recon[,c(8,9,10,3)], tibet_recon$gdd5_wapls)
+```
+
+Plot the final results. Note the difference in scales for the MAT and WA-PLS based reconstructions -- the WA-PLS reconstructions are generally much warmer.
+```{r, echo = FALSE, cache = TRUE}
+recon <- map_dfr(c(0, 1000, 2000, 3000, 4000, 5000, 6000), 
+                   ~ mutate(tibet_grid, Age = .)) %>%
+  as_tibble() %>%
+  select(x,y,elev, Age) %>%
+  remove_missing() %>%
+  mutate(gdd0 = predict(gdd0_mat_tps,x = .),
+          gdd5 = predict(gdd5_mat_tps, x = .),
+          gdd0_wapls = predict(gdd0_wapls_tps, x = .),
+          gdd5_wapls = predict(gdd5_wapls_tps, x = .)) %>%
+  mutate(across(gdd0:gdd5_wapls, ~if_else(.x < 0, 0, .x))) %>% 
+  select(x, y, age = Age, gdd0:gdd5_wapls) %>%
+  st_as_stars(dims = 1:3) %>% 
+  st_set_crs(4326)
+```
+
+
+```{r, echo = FALSE}
+ggplot() + 
+  geom_stars(data = recon['gdd0']) + 
+  scale_fill_viridis_c(option = 'magma', limits = c(0, 20514)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+     labs(title = 'Reconstructed GDD0', subtitle = 'Modern Analogue Technique')  +
+  theme_void() 
+ggplot() + 
+  geom_stars(data = recon['gdd0_wapls']) + 
+  scale_fill_viridis_c(option = 'magma', limits = c(0, 20514)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+     labs(title = 'Reconstructed GDD0', subtitle = 'Weighted Average -- Partial Least Squares') +
+  theme_void() 
+ggplot() + 
+  geom_stars(data = recon['gdd5']) + 
+  scale_fill_viridis_c(option = 'magma', limits = c(0, 20514)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+     labs(title = 'Reconstructed GDD 5.5', subtitle = 'Modern Analogue Technique') +
+  theme_void() 
+ggplot() + 
+  geom_stars(data = recon['gdd5_wapls']) + 
+  scale_fill_viridis_c(option = 'magma', limits = c(0, 20514)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) + 
+      labs(title = 'Reconstructed GDD5.5', subtitle = 'Weighted Average -- Partial Least Squares') +
+  theme_void() 
+```
+Look at the differences from the past to the present. Positive/red values indicate temperatures were warmer in the past than the present.
+```{r, echo = FALSE}
+ggplot() + 
+  geom_stars(data =  recon[1,,,2:7] - recon[1,,,c(1,1,1,1,1,1)]) + 
+  scale_fill_distiller(palette = 'RdBu', limits = c(-6632, 6632)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+     labs(title = 'Difference in GDD0 from Present', subtitle = 'Modern Analogue Technique')  +
+  theme_void() 
+
+ggplot() + 
+  geom_stars(data =  recon[3,,,2:7] - recon[3,,,c(1,1,1,1,1,1)]) + 
+  scale_fill_distiller(palette = 'RdBu', limits = c(-6632, 6632)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+ labs(title = 'Difference in GDD0 from Present', subtitle = 'Weighted Average -- Partial Least Squares')  +   
+  theme_void() 
+
+ggplot() + 
+  geom_stars(data =  recon[2,,,2:7] - recon[2,,,c(1,1,1,1,1,1)]) + 
+  scale_fill_distiller(palette = 'RdBu', limits = c(-6632, 6632)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+       labs(title = 'Difference in GDD5.5 from Present', subtitle = 'Modern Analogue Technique')  +
+  theme_void() 
+
+ggplot() + 
+  geom_stars(data =  recon[4,,,2:7] - recon[4,,,c(1,1,1,1,1,1)]) + 
+  scale_fill_distiller(palette = 'RdBu', limits = c(-6632, 6632)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+     labs(title = 'Difference in GDD5.5 from Present', subtitle = 'Weighted Average -- Partial Least Squares')  +
+  theme_void() 
+```
+Much of the differences in these reconstructions seem to be due to high temperatures in lowland areas further away from our pollen sites on the Tibetan Plateau. Try plotting the images again, just limited to the Plateau (we'll focus just on GDD0 for simplicity).
+
+```{r, echo = FALSE, warning = FALSE}
+ggplot() + 
+  geom_stars(data = st_crop(recon['gdd0'], tibet)) + 
+  scale_fill_viridis_c(option = 'magma', na.value = NA, limits = c(0, 7000)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+    labs(title = 'Reconstructed GDD0', subtitle = 'Modern Analogue Technique')  +
+  theme_void() 
+ggplot() + 
+  geom_stars(data = st_crop(recon['gdd0_wapls'], tibet)) + 
+  scale_fill_viridis_c(option = 'magma', na.value = NA, limits = c(0, 7000)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+  labs(title = 'Reconstructed GDD0', subtitle = 'Weighted Average -- Partial Least Squares') +
+  theme_void() 
+
+ggplot() + 
+  geom_stars(data =  st_crop(recon[1,,,2:7] - recon[1,,,c(1,1,1,1,1,1)], tibet)) + 
+  scale_fill_distiller(palette = 'RdBu', na.value = NA, limits = c(-5200, 5200)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+  labs(title = 'Difference in GDD0 from Present', subtitle = 'Modern Analogue Technique')  +
+  theme_void() 
+
+ggplot() + 
+  geom_stars(data =  st_crop(recon[3,,,2:7] - recon[3,,,c(1,1,1,1,1,1)], tibet)) + 
+  scale_fill_distiller(palette = 'RdBu', na.value = NA, limits = c(-5200, 5200)) +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+ labs(title = 'Difference in GDD0 from Present', subtitle = 'Weighted Average -- Partial Least Squares')  +   
+  theme_void() 
+```
+Comparing these to the modern-day observational data, we can see the reconstructions are still overestimating GDD in the sparsely-sampled northeast quadrant. Could this be an issue with the interpolation, the limited sample size in this region, or both?
+
+```{r, echo = FALSE, warning=FALSE}
+# Modern Tibet GDDs for comparison, not shown
+ggplot() + 
+  geom_stars(data = st_apply(cmfd['gdd5'], 1:2, mean) %>% st_crop(tibet)) +
+  theme_bw() +
+  scale_fill_viridis_c(option = 'magma', na.value = NA, name = 'GDD5') +
+    geom_sf(data = tibet, fill = NA)
+```
+
+Plot some preliminary estimates of the reconstructed niches for winter wheat and broomcorn millet. Again note that the WA-PLS method tends to result in warmer reconstructions than the MAT method.
+```{r, warning = FALSE, echo = FALSE}
+ggplot() + 
+  geom_stars(data = st_crop(recon['gdd0'] > 1907, tibet)) + 
+  scale_fill_scico_d(palette = 'bamako', na.value = NA, name = 'Wheat niche?') +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+    labs(title = 'Winter wheat niche reconstruction', subtitle = 'Modern Analogue Technique') +
+  theme_void() 
+ggplot() + 
+  geom_stars(data = st_crop(recon['gdd0_wapls'] > 1907, tibet)) + 
+  scale_fill_scico_d(palette = 'bamako', na.value = NA, name = 'Wheat niche?') +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+    labs(title = 'Winter wheat niche reconstruction', subtitle = 'Weighted Averages - Partial Least Squares') +
+  theme_void() 
+ggplot() + 
+  geom_stars(data = st_crop(recon['gdd5'] > 2082, tibet)) + 
+  scale_fill_scico_d(palette = 'bamako', na.value = NA, name = 'Millet niche?') +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+  labs(title = 'Broomcorn millet niche reconstruction', subtitle = 'Modern Analogue Technique') +
+  theme_void() 
+ggplot() + 
+  geom_stars(data = st_crop(recon['gdd5_wapls'] > 2082, tibet)) + 
+  scale_fill_scico_d(palette = 'bamako', na.value = NA, name = 'Millet niche?') +
+  facet_wrap(~age) + 
+  geom_sf(data = tibet, fill = NA) +
+    labs(title = 'Broomcorn millet niche reconstruction', subtitle = 'Weighted Averages - Partial Least Squares') +
+  theme_void() 
+```
+
+
+
+# Next Steps
+
+- More targeted selection of sites, sample types, and taxa.
+- Account for radiocarbon date uncertainty.
+- Constrain interpolation to match present-day observations.
+- Compare to mid-Holocene and recent climate models.
