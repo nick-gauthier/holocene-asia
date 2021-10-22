@@ -1,0 +1,264 @@
+---
+title: "Trees"
+author: "Nick Gauthier"
+date: "10/18/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidymodels)
+library(stars)
+library(readxl)
+library(spatialsample)
+```
+
+
+Import the fossil pollen data to limit the transfer functions to taxa that are in both samples.
+
+```{r}
+cmfd <- readRDS('cmfd.rds')
+# import the modern site data
+modern_sites <- read_excel('china pollen data/China modern pollen - info.xlsx', 
+                           sheet = 2, skip = 1) %>%
+  st_as_sf(coords = c(4,5), crs = 4326) %>%
+  select(id = No., 
+         site = `Site name`, 
+         elev = `Elevation (m)`, 
+         sample_type = `Sample type`, 
+         source = `Data source`, 
+         data_type = `Data type`, 
+         modern_veg_map = `Modern vegetation information (the Vegetation Map of China)`, 
+         modern_veg_samp = `Modern vegetation information (sample and its surroundings)`, 
+         pot_veg = `Potential vegetation (for cultivated vegetation, aquatic vegetation and other cryptic vegetation)`)
+
+# import the modern pollen data
+modern_pollen <- read_excel('china pollen data/China modern pollen - data.xlsx', 
+                            sheet = 2, skip = 1) %>%
+  slice(-(1:2)) %>%
+  select(-(Site:`Elevation (m)`)) %>%
+  column_to_rownames(var = 'No.') %>%
+  mutate(across(everything(), as.numeric))
+
+all_pts <- st_extract(st_apply(cmfd, 1:2, mean), at = modern_sites)
+outside_ids <- all_pts %>%
+  st_drop_geometry() %>%
+  bind_cols(modern_sites) %>%
+  filter(is.na(gdd0)) %>%
+  pull(id)
+pts <- st_extract(st_apply(cmfd, 1:2, mean), at = modern_sites[-outside_ids,])
+
+fossil_pollen <- read_excel('china pollen data/China west fossil pollen - data.xlsx') %>%
+  slice(-(1:2)) %>%
+  # remove the Pearl River transect and Yanghu Lake
+  filter(!str_detect(`Site/Taxa`, 'PEARL'),
+         !str_detect(`Site/Taxa`, 'YANGHU')) %>% 
+  column_to_rownames("Site/Taxa") %>%
+  select(-(Long:Age)) %>%
+  mutate(across(everything(), as.numeric))
+
+dat <- rioja::Merge(modern_pollen[-outside_ids,], fossil_pollen, join = 'inner', split = TRUE)
+```
+
+
+```{r}
+library(ranger)
+forest <- ranger(y = pts$gdd0, x = dat$modern_pollen[,-298] / 100, num.trees = 1000, mtry = 20, importance = 'permutation')
+```
+
+```{r}
+forest
+```
+
+```{r}
+mat_gdd0 <- rioja::MAT(dat$modern_pollen[,-298] / 100, 
+                       as_tibble(pts)$gdd0, 
+                       lean = FALSE) %>%
+  rioja::crossval(cv.method = 'h-block', 
+           h.cutoff = units::set_units(100000, m), 
+           h.dist = dist_mat,
+           verbose = FALSE)
+  mat_gdd0
+```
+
+```{r}
+library(vip)
+vip(forest)
+```
+```{r}
+sqrt(681120.2)
+```
+
+
+
+```{r}
+plot_splits <- function(split) {
+    p <- analysis(split) %>%
+        mutate(analysis = "Analysis") %>%
+        bind_rows(assessment(split) %>%
+                      mutate(analysis = "Assessment")) %>%
+        ggplot(aes(X, Y, color = analysis)) + 
+        geom_point(alpha = 0.5) +
+        labs(color = NULL)
+    print(p)
+}
+```
+
+```{r}
+train <- cbind(gdd0 = pts$gdd0, st_coordinates(pts), dat$modern_pollen[,-298] / 100)
+folds <- spatial_clustering_cv(train, coords = c(X, Y), v = 10)
+```
+
+```{r}
+pollen_recipe <- recipe(gdd0 ~ ., data = train) %>%
+  step_rm(X, Y)
+
+rf_mod <- rand_forest(mode = 'regression', 
+                      mtry = tune(),
+                      min_n = tune(), 
+                      trees = tune())
+knn_mod <- nearest_neighbor(mode = 'regression', 
+                            neighbors = tune(), 
+                            weight_func = tune(),
+                            dist_power = tune())
+
+rf_wf <- workflow(pollen_recipe, rf_mod)
+knn_wf <- workflow(pollen_recipe, knn_mod)
+```
+
+```{r}
+walk(folds$splits, plot_splits)
+```
+```{r}
+```
+
+```{r}
+all_cores <- parallel::detectCores(logical = FALSE)
+
+library(doParallel)
+cl <- makePSOCKcluster(all_cores)
+registerDoParallel(cl)
+```
+
+```{r}
+knn_param <-  knn_wf %>% 
+  parameters() %>% 
+    update(neighbors = neighbors(c(1L, 25L)),
+           weight_func = weight_func(values = c("rectangular", 
+                                                'triangular', 
+                                                'epanechnikov',
+                                                'gaussian',
+                                                'optimal')),
+           dist_power = dist_power()
+  )
+rf_param <-  rf_wf %>% 
+  parameters() %>%
+  update(mtry = mtry(c(1L, 60L)))
+
+ctrl <- control_bayes(verbose = TRUE)
+set.seed(8154)
+knn_search <- tune_bayes(knn_wf, resamples = folds, initial = 10, iter = 50,
+                         param_info = knn_param, control = ctrl)
+
+rf_search <- tune_bayes(rf_wf, resamples = folds, initial = 10, iter = 50,
+                         param_info = rf_param, control = ctrl)
+```
+
+```{r}
+stopCluster(cl)
+```
+
+```{r}
+autoplot(knn_search)
+autoplot(rf_search)
+```
+```{r}
+knn_search %>% show_best()
+```
+
+
+```{r}
+rf_search %>%
+  show_best
+```
+
+
+
+```{r}
+rf_final <- rf_search %>%
+  select_best(metric ='rmse') %>%
+  finalize_model(rf_mod, .)
+
+knn_final <- knn_search %>%
+  select_best(metric = 'rmse') %>%
+  finalize_model(knn_mod, .)
+```
+
+```{r}
+rf_final
+knn_final
+```
+
+```{r}
+library(vip)
+
+rf_final %>%
+  set_engine("ranger", importance = "permutation") %>%
+  fit(gdd0 ~ .,
+    data = prep(pollen_recipe) %>% juice
+  ) %>%
+  vip(geom = "point")
+```
+
+```{r}
+final_preds <- bind_cols(fit(rf_final, gdd0 ~ .,
+    data = prep(pollen_recipe) %>% juice) %>% predict(train),
+    fit(knn_final, gdd0 ~ .,
+    data = prep(pollen_recipe) %>% juice) %>% predict(train))  %>%
+    rename(rf = .pred...1, knn = .pred...2)
+```
+
+```{r}
+train %>% select(gdd0:Y) %>%
+ bind_cols(final_preds) %>%
+  pivot_longer(rf:knn) %>%
+  ggplot(aes(gdd0, value)) +
+  geom_point() +
+  facet_wrap(~name) +
+  geom_abline(slope = 1, intercept = 0, color = 'red') +
+  ggtitle('Observed vs Predicted', 'KNN vs Random Forest')
+```
+```{r}
+train %>% select(gdd0:Y) %>%
+ bind_cols(final_preds) %>%
+  pivot_longer(rf:knn) %>%
+  mutate(error = gdd0 - value) %>%
+  arrange(abs(error)) %>%
+  ggplot() +
+  geom_point(aes(X, Y, color = error)) +
+  facet_wrap(~name) +
+  scale_color_distiller(palette = 'RdBu', limits = c(-6700, 6700)) +
+  geom_sf(data = china %>% select(-name), fill = NA)
+```
+
+
+```{r}
+set.seed(456)
+rf_fit_rs <- 
+  rf_wf %>% 
+  fit_resamples(folds)
+knn_fit_rs <- 
+  knn_wf %>% 
+  fit_resamples(folds)
+```
+
+```{r}
+collect_metrics(rf_fit_rs)
+collect_metrics(knn_fit_rs)
+```
+
+```{r}
+rf_mod
+```
+
