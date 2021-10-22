@@ -8,11 +8,16 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-countries <- rnaturalearth::ne_countries(country = c('Japan', 'South Korea', 'North Korea'), returnclass = 'sf', scale = 'medium')
+countries <- rnaturalearth::ne_countries(country = c('Japan', 
+                                                     'South Korea', 
+                                                     'North Korea'), 
+                                         returnclass = 'sf', 
+                                         scale = 'medium')
 plot(countries)
 ```
+
 ```{r}
-gdd <- read_stars('~/Desktop/CHELSA_gdd10_1981-2010_V.2.1.tif') %>%
+gdd <- read_stars('~/Desktop/CHELSA_V2_bio_clim/CHELSA_gdd10_1981-2010_V.2.1.tif') %>%
   st_crop(countries) %>%
   setNames('GDD10')
 ```
@@ -48,3 +53,64 @@ ggplot() +
   coord_sf(ylim = c(30, 45)) +
   theme_bw()
 ```
+
+## Polish Army Polygons
+
+```{r}
+rice_polys <- read_sf('japan_poly.shp') %>% 
+  select(-id) %>% 
+  replace_na(replace = list(type = 'rice')) %>%
+  st_make_valid() %>%
+  mutate(type = as.factor(type))
+```
+
+```{r}
+plot(rice_polys)
+```
+```{r}
+poly_mean <- aggregate(gdd, rice_polys, mean, na.rm = TRUE, exact = TRUE)
+poly_sd <- aggregate(gdd, rice_polys, mean, na.rm = TRUE, exact = TRUE)
+```
+
+```{r}
+test %>% plot
+```
+```{r}
+st_crop(gdd, rice_polys) %>% plot
+```
+```{r}
+test <- st_rasterize(rice_polys, dx = 0.00833333) %>% st_warp(gdd)
+
+plot(test, downsample = 1)
+
+
+
+test2 <- gdd %>% 
+  st_crop(test) %>% 
+  st_as_stars()
+
+test3 <- gdd %>%
+  st_as_stars() %>%
+  c(test) %>%
+  as_tibble() %>%
+  filter(!is.na(GDD10)) %>%
+  mutate(type = if_else(is.na(type), 'no rice', as.character(type)))
+
+test3 %>%
+  ggplot(aes(GDD10, group = type, fill = type)) +
+  geom_density(alpha = .5)
+
+test3 %>%
+  mutate(type = if_else(type == 'no rice', type, 'rice')) %>%
+  ggplot(aes(GDD10, group = type, fill = type)) +
+  geom_density(alpha = .5)
+```
+```{r}
+as_tibble(test2) %>%
+  left_join(as_tibble(test)) %>%
+  remove_missing()
+
+as_tibble(test) %>% remove_missing
+as_tibble(test2) %>% remove_missing
+```
+
