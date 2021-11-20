@@ -1,0 +1,281 @@
+---
+title: "combining pollen data"
+author: "Nick Gauthier"
+date: "11/18/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+modern_pollen2 <-  read_excel('~/Downloads/data with site removal 2/China modern pollen - data - site removal.xlsx', skip = 1) %>%
+    slice(-(1:2)) %>%
+  rename(count_nonzero = ...784) %>%
+  filter(is.na(`Site removal`)) %>%
+    column_to_rownames(var = 'No.') %>%
+  select(-(c(`Site removal`:`Elevation (m)`, count_nonzero))) %>%
+  mutate(across(everything(), as.numeric))
+```
+
+so Taxa combo has 737 taxa and 257 reduced types
+```{r}
+taxa_combo <- read_excel('~/Downloads/pollen taxa combination.xlsx')
+nrow(taxa_combo)
+taxa_combo$`taxa combination` %>% unique() %>% length
+```
+
+The modern pollen data has 774 unique taxa
+```{r}
+mod_taxa <- modern_pollen2 %>% 
+  names %>%
+  as_tibble
+nrow(mod_taxa)
+mod_taxa$value %>% unique() %>% length
+``` 
+
+a simple match gives us 609 names in common, so are the mismatches real or is it some pesky issue with the text?
+```{r}
+inner_join(mod_taxa, taxa_combo, by = c('value' = 'pollen taxa')) %>% nrow
+```
+
+what values are in the modern pollen data but not the lookup table? there are 165 rows. up top we have abies fargessii, which is in the lookup table as Abies-fargesii. a few others are like this, so see what happens when we add dashes between value with spaces
+```{r}
+left_join(mod_taxa, taxa_combo, by = c('value' = 'pollen taxa')) %>%
+  filter(is.na(`taxa combination`))
+```
+now there are only 115 taxa missing, so 50 taxa liked having the dashes added in
+```{r}
+mod_taxa %>%
+  transmute(value = str_replace_all(value, ' ', '-')) %>%
+left_join(taxa_combo, by = c('value' = 'pollen taxa')) %>%
+  filter(is.na(`taxa combination`))
+```
+
+Let's get those weird names and see how many of them there are? looks like these non matching taxa, at least some of them, do get to reasonably high percentages of the total assemblages, so it'd be nice to keep them. actually, in 42 cases these taxa together are 50% or more of the total percentage! so yes, it'd be bad to get rid of these.
+```{r}
+newnames <- mod_taxa %>%
+  transmute(value = str_replace_all(value, ' ', '-')) %>%
+left_join(taxa_combo, by = c('value' = 'pollen taxa')) %>%
+  filter(is.na(`taxa combination`)) %>%
+  select(value) %>%
+  transmute(value = str_replace_all(value, '-', ' ')) %>% 
+  pull(value)
+select(modern_pollen2, starts_with(newnames)) %>% mutate(test = rowSums(.)) %>%
+  filter(test > 50) %>%
+  select(where(~any(. > 50)))
+```
+Ah! a bunch of these are coming from Quercus and Pinus. should be Quercus_evergreen rather than just Quercus-evergreen, and Pinus_Haplxylon
+```{r}
+mod_taxa %>% filter(str_detect(value, 'Pinus|Quercus')) %>%
+  mutate(value2 = str_replace_all(value, c(' deciduous' = '_deciduous', ' evergreen' = '_evergreen', ' Haploxylon' = '_Haploxylon', ' Diploxylon' = '_Diploxylon')))
+```
+now redo the renames above. good, only 4 taxa got corrected this way. so only 121 taxa are missing now
+```{r}
+mod_taxa %>%
+  transmute(value = str_replace_all(value, c(' deciduous' = '_deciduous', ' evergreen' = '_evergreen', ' Haploxylon' = '_Haploxylon', ' Diploxylon' = '_Diploxylon', ' Cereal' = '_Cereal')),
+            value = str_replace_all(value, ' ', '-')) %>% 
+  left_join(taxa_combo, by = c('value' = 'pollen taxa')) %>%
+  filter(is.na(`taxa combination`))
+```
+Now redo the test with a stricter threshold of 10%. These are our 9 remaining taxa to check on, in that they are present in the modern pollen in reasonable amounts but not the lookup
+```{r}
+newnames2 <- mod_taxa %>%
+   transmute(value = str_replace_all(value, c(' deciduous' = '_deciduous', ' evergreen' = '_evergreen', ' Haploxylon' = '_Haploxylon', ' Diploxylon' = '_Diploxylon', ' Cereal' = '_Cereal')),
+            value = str_replace_all(value, ' ', '-')) %>% 
+left_join(taxa_combo, by = c('value' = 'pollen taxa')) %>%
+  filter(is.na(`taxa combination`)) %>%
+  select(value) %>%
+  transmute(value = str_replace_all(value, '-', ' ')) %>% 
+    transmute(value = str_replace_all(value, '_', ' ')) %>% 
+  pull(value)
+
+select(modern_pollen2, all_of(newnames2)) %>% mutate(test = rowSums(.)) %>%
+  filter(test > 10) %>%
+    select(where(~any(. > 10))) %>%
+  select(-test)
+```
+again with a 3% threshold
+```{r}
+select(modern_pollen2, all_of(newnames2)) %>% mutate(test = rowSums(.)) %>%
+  filter(test > 3) %>%
+    select(where(~any(. > 3))) %>%
+  select(-test)
+```
+ok so Liliaceae+Lilium should go into Liliaceae -- may have to hard code this. same with Iridaceae+Iris to Iridaceae. Carpinus+Corylus to Betulaceae. Pinus+Picea is in modern but Picea+Pinus is what's in the lookup, which says to put it in Pinaceae, although confusingly just Picea goes in Picea. Sophora alopecuroides should go in Fabaceae (tree). Toona sinensis to Meliaceae.
+
+Let's do a case when to fix all these
+
+
+```{r}
+mod_taxa %>%
+   transmute(value = str_replace_all(value, c(' deciduous' = '_deciduous', 
+                                              ' evergreen' = '_evergreen', 
+                                              ' Haploxylon' = '_Haploxylon', 
+                                              ' Diploxylon' = '_Diploxylon', 
+                                              ' Cereal' = '_Cereal')),
+            value = str_replace_all(value, ' ', '-')) %>% 
+  left_join(taxa_combo, by = c('value' = 'pollen taxa')) %>% 
+  mutate(`taxa combination` = case_when(value ==  'Liliaceae+Lilium' ~ 'Liliaceae',
+                                          value == 'Iridaceae+Iris' ~ 'Iridaceae',
+                                          value == 'Carpinus+Corylus' ~ 'Betulaceae',
+                                          value == 'Pinus+Picea' ~ 'Pinaceae',
+                                          value == 'Sophora-alopecuroides' ~ 'Fabaceae (tree)',
+                                          value == 'Toona-sinensis' ~ 'Meliaceae',
+                                          TRUE ~ `taxa combination`))
+```
+
+Castanea+Castanopsis+Cyclobalanopsis is another category that combines two types not combined in the aggregation, castanea and castanopsis go to castanean and cyclobalanopsis is its own thing
+
+likewise why is carpinus just carpinus but carpinus+corylus in betulaceae. carpinus is the genus and beulacceae is the family ... so why are the combinations varied here?
+
+casearia is not present at all!
+
+now how many of these are also in the fossil pollen data? maybe a lot of this is moot?
+
+or maybe start from the key taxa in the aggregation and work out from there? but what if the pollen doesn't sum to 100 anymore. well that's already been happening under the hood everytime I filter in the fossil taxa types
+
+try looking at the fossil data
+```{r}
+fossil_pollen2 <- read_excel('~/Downloads/data with site removal 2/China west fossil pollen - data from sites - site removal.xlsx', guess_max = 3000) %>%
+  filter(is.na(`Site removal`)) %>%
+  filter(Age <= 7000) %>%
+  column_to_rownames("Site") %>%
+  select(-(`Site removal`:Age)) %>%
+  select(-`count non-zero cell`) %>%
+  mutate(across(everything(), as.numeric))
+```
+```{r}
+foss_taxa <- names(fossil_pollen2) %>%
+  as_tibble()
+
+full_join(mod_taxa, foss_taxa) %>% arrange(value)
+```
+```{r}
+foss_taxa$value
+mod_taxa$value
+```
+
+```{r}
+VennDiagram::venn.diagram(list(foss_taxa$value, mod_taxa$value), filename = NULL)
+
+test <- VennDiagram::calculate.overlap(x<-list(old = foss_taxa$value, new = mod_taxa$value))
+test
+library(RAM)
+foo <- c('a','b','c','d')
+baa <- c('a','e','f','g')
+group.venn(list(old = foss_taxa$value, new = mod_taxa$value, lookup = taxa_combo$`pollen taxa`), 
+    fill = c("orange", "blue"),lab.cex = .3)
+```
+```{r}
+library(VennDiagram)
+test2 <- calculate.overlap(list(old = foss_taxa$value, new = mod_taxa$value, lookup = taxa_combo$`pollen taxa`))
+test2
+```
+
+
+```{r}
+Merge(modern_pollen2, fossil_pollen2, join = 'inner', split = TRUE)
+```
+
+what about looking at just Jian Ni's strictest categroies? This gives us only 286 taxa
+```{r}
+reduced_taxa <- taxa_combo %>%
+  filter(!is.na(`key taxa (first order)`) | !is.na(`key taxa (second order)`))
+```
+
+```{r}
+group.venn(list(modern = mod_taxa %>%
+  transmute(value = str_replace_all(value, c(' deciduous' = '_deciduous', ' evergreen' = '_evergreen', ' Haploxylon' = '_Haploxylon', ' Diploxylon' = '_Diploxylon', ' Cereal' = '_Cereal')),
+            value = str_replace_all(value, ' ', '-')) %>%
+  pull(value), lookup = reduced_taxa$`pollen taxa`),
+    fill = c("orange", "blue"),lab.cex = .5)
+```
+```{r}
+mod_taxa
+```
+```{r}
+mod_pollen_restricted <- modern_pollen2 %>%
+  rownames_to_column('site') %>%
+  mutate(site = as.integer(site)) %>%
+  pivot_longer(-site) %>%
+     mutate(name = str_replace_all(name, c(' deciduous' = '_deciduous', 
+                                              ' evergreen' = '_evergreen', 
+                                              ' Haploxylon' = '_Haploxylon', 
+                                              ' Diploxylon' = '_Diploxylon', 
+                                              ' Cereal' = '_Cereal')),
+            name = str_replace_all(name, ' ', '-')) %>% 
+  left_join(taxa_combo, by = c('name' = 'pollen taxa')) %>% 
+  mutate(`taxa combination` = case_when(name ==  'Liliaceae+Lilium' ~ 'Liliaceae',
+                                          name == 'Iridaceae+Iris' ~ 'Iridaceae',
+                                          name == 'Carpinus+Corylus' ~ 'Betulaceae',
+                                          name == 'Pinus+Picea' ~ 'Pinaceae',
+                                          name == 'Sophora-alopecuroides' ~ 'Fabaceae (tree)',
+                                          name == 'Toona-sinensis' ~ 'Meliaceae',
+                                          TRUE ~ `taxa combination`)) %>%
+    filter(!is.na(`key taxa (first order)`) | !is.na(`key taxa (second order)`)) %>%
+  #filter(`taxa combination` != 'na') # only needed without taxa filter above 
+  mutate(`taxa combination` = str_replace(`taxa combination`, 'tropocal', 'tropical')) %>%
+  group_by(site, `taxa combination`) %>%
+  summarise(value = sum(value), .groups = 'drop') %>%
+  pivot_wider(names_from = `taxa combination`, values_from = value) %>%
+  column_to_rownames('site')
+```
+
+So this works mostly, but in a few cases we miss out on the majority of the assemblage!
+```{r}
+mod_pollen_restricted %>% rowSums() %>% hist
+```
+
+Great!
+
+Now what about doing the same for the fossil pollen data?
+```{r}
+intersect(foss_taxa$value, mod_taxa$value) %>% length
+setdiff(foss_taxa$value, mod_taxa$value) %>% length
+setdiff(mod_taxa$value, foss_taxa$value) %>% length
+```
+
+```{r}
+setdiff(foss_taxa$value, mod_taxa$value) 
+setdiff(mod_taxa$value, foss_taxa$value) 
+```
+
+fixing the known modern pollen issues only adds 11 matches, so still much to be explained . . .
+```{r}
+setdiff(foss_taxa$value, mod_taxa$value %>% str_replace_all(c(' deciduous' = '_deciduous', 
+                                              ' evergreen' = '_evergreen', 
+                                              ' Haploxylon' = '_Haploxylon', 
+                                              ' Diploxylon' = '_Diploxylon', 
+                                              ' Cereal' = '_Cereal')) %>% 
+            str_replace_all( ' ', '-'))
+
+```
+
+try combining with the lookup table
+```{r}
+foss_taxa %>%
+  left_join(taxa_combo, by = c('value' = 'pollen taxa')) %>%
+  filter(is.na(`taxa combination`))
+```
+Anemone+Ranunculus	to Ranunculaceae, Aster+Gnaphalium	to Asteraceae (non-Artemisia), Balsaminaceae	is Balsaminaceae,Betula+Alnus	is probably Betulaceae, Carduus is Asteraceae (non-Artemisia) (unles its different than Carduus+Cirsium), Carpinus-cordata	 is Betulaceae, Chenopodiaceae+Amaranthaceae	is Amaranthaceae, Clematis+Anemone to Ranunculaceae, Clethraceae is Clethraceae, Corydalis-semenowii	to Papaveraceae, Corylus+Carpinus	to Betulaceae, Cuscuta-japonica	to Convolvulaceae, Cyclobalanopsis-glauca	to Cyclobalanopsis, Dacrydium-pectinatum	to Podocarpaceae, Eriocaulaceae to Eriocaulaceae, Ledum to Ericaceae, Meconopsis to Papaveraceae, Orchidaceae to Orchidaceae, Pandanaceae to Pandanaceae, Papaver-argemone	to Papaveraceae, Plantago-major to Plantaginaceae, Podocarpaceae to Podocarpaceae, Potentilla+Chamaerhodos	 to Rosaceae (herb), Prunella+Nepeta	to Lamiaceae, Pteroceltis-tatarinowii	to Ulmaceae (temperate+subtropocal), Ranunculus-acris	to Ranunculaceae,Reaumuria-soongarica	to Reaumuria, Rhoipteleaceae to Rhoipteleaceae, Ribes-alpinum	 to Saxifragaceae (shrub), Sanguisorba-officinalis	to Rosaceae (herb), Saururaceae to Saururaceae, Saxifraga-hirsuta+Saxifraga-cuneifolia to Saxifragaceae (herb), Saxifraga-stellaris	to Saxifragaceae (herb), 
+
+Asteraceae+Artemisia	is an issue becuse the lookup differentiates artemisia, non-artemisia asteraceaea, and undeifferntiate asteraceae.
+Betula-nana	is either Betula or Betulaceae *this is a good example of the taxon level irregulatiry*
+
+Castanopsis+Castanea	each should be its own
+
+Chenopodiaceae+Caryophyllaceae	 could be either
+Cupressaceae+Taxodiaceae	should be separate
+Humulus+Urticaceae	 unclear
+Lithocarpus+Castanopsis+Castanea	 unclear, becuase jian ni separates out castanea
+Papaver+Caltha	 split
+Polygonum-nepalensis	 should be persicum now?
+Sabina+Cupressaceae	 split
+Pinus_haploxylon is different from the capital H one that's also included
+Quercus_sclerophyllous unclear
+Salix+Populus	 split
+Sanguisorba-officinalis	
+Secale-cereale	 is rye (poaceae) but do we want to include?
+Symplocos+Liquidambar-formosana	 split
