@@ -1,0 +1,134 @@
+---
+title: "Daylength"
+author: "Nick Gauthier"
+date: "11/23/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(stars)
+library(tidyverse)
+library(insol)
+library(chillR)
+bbox <- st_bbox(c(xmin = 100, xmax = 150, ymin = -15, ymax = 45), crs = 4326)
+ref <- st_as_stars(bbox, dx = 0.1)
+coasts <- rnaturalearth::ne_coastline(returnclass = 'sf', scale = 'medium') %>%
+  st_crop(bbox)
+sf::sf_use_s2(FALSE)
+```
+
+```{r}
+insol::daylength(40, 100, 100, 5)
+chillR::daylength(40, 100)
+geosphere::daylength(40:41, 100:101)
+```
+
+
+```{r}
+clim <- read_stars(c('~/Downloads/CHELSA_gdd10_1981-2010_V.2.1.tif',
+           '~/Downloads/CHELSA_gdgfgd10_1981-2010_V.2.1.tif',
+           '~/Downloads/CHELSA_gddlgd10_1981-2010_V.2.1.tif',
+           '~/Downloads/CHELSA_fcf_1981-2010_V.2.1.tif')) %>%
+    st_crop(bbox) %>%
+    #st_as_stars() %>%  
+    #st_warp(ref, method = 'average', use_gdal = TRUE) %>%
+    setNames(c('gdd10', 'gddfgd10', 'gddfgd', 'fcf'))
+```
+
+```{r}
+plot(clim)
+```
+
+
+
+```{r}
+ggplot() +
+  geom_stars(data = transmute(ref, daylength = geosphere::daylength(st_coordinates(ref)$y, 100))) +
+  scale_fill_viridis_c() +
+  geom_sf(data = coasts)
+```
+
+```{r}
+list.files('~/Downloads/CMFD', full.names = TRUE) %>% map(~read_ncdf(., eps = 0.001, var = 'temp') %>%
+                                                                    mutate(temp = units::set_units(temp, degree_C) %>% units::drop_units()) %>%
+                                                                    transmute(gdd0 = if_else(temp > 0, temp, 0) - 0,
+                                                                              gdd5 = if_else(temp > 5.5, temp, 5.5) - 5.5) %>%
+                                                                    st_apply(1:2, sum) %>%
+                                                                    merge()) %>%
+  do.call(c, .) %>%
+  merge(name = 'time') %>%
+  st_set_dimensions('time', values = 1979:2018) %>%
+  split('attributes')
+```
+
+```{r, warning = FALSE}
+daylengths <- list.files('~/Downloads/CMFD', full.names = TRUE) %>% 
+  map_dfr(~read_ncdf(.x, eps = 0.001, var = 'temp') %>%
+  mutate(temp = units::set_units(temp, degree_C) %>% units::drop_units()) %>%
+  transmute(growth = if_else(temp > 10, TRUE, FALSE)) %>%
+  as_tibble() %>%
+  filter(growth == TRUE) %>%
+  mutate(doy = insol::daydoy(time)) %>%
+      group_by(lon, lat) %>%
+  filter(doy == min(doy)), .id = 'year') %>%
+  group_by(year, .add = TRUE) %>%
+  summarise(doy = mean(doy, na.rm = TRUE)) %>%
+  mutate(daylength = geosphere::daylength(lat, doy))
+  
+ggplot(daylengths, aes(lon, lat)) +
+  geom_raster(aes(fill = daylength)) +
+  scale_fill_viridis_c() +
+  coord_quickmap() +
+  theme_bw()
+```
+
+
+```{r}
+gdd_mask <- is.na(gdd10)
+plot(gdd_mask)
+```
+```{r}
+test <- gdd10_first %>%
+  setNames('doy') %>%
+  st_as_stars() %>%
+  mutate(lat = st_coordinates(.)$y) %>%
+  mutate(daylength = geosphere::daylength(lat, doy))
+
+ggplot() +
+  geom_stars(data = test['daylength']) +
+  scale_fill_viridis_c() +
+  theme_bw() +
+  coord_quickmap()
+```
+
+```{r}
+countries <- rnaturalearth::ne_coastline(returnclass = 'sf', 
+                                         scale = 'small') %>%
+  st_crop(east_asia)
+plot(countries)
+ggplot() +
+  geom_stars(data = test['daylength'] %>% st_crop(countries)) +
+  scale_fill_viridis_c(na.value = NA, name = 'Hours') +
+  geom_sf(data = countries, fill = NA) +
+  theme_bw() +
+  ggtitle('Photoperiod on first day above 10°C')
+ggsave('japan_photoperiod.png', height = 6, width = 6)
+```
+```{r}
+ggplot() +
+  geom_stars(data = gdd10) +
+  scale_fill_viridis_c(na.value = NA, name = 'Degree days') +
+  geom_sf(data = countries, fill = NA) +
+  theme_bw() +
+  ggtitle('Growing degree days above 10°C')
+ggsave('japan_dgg10.png', height = 6, width = 6)
+```
+
+
+```{r}
+gdd10_first %>% st_coordinates
+```
+```{r}
+gdd10_first
+```
+
